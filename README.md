@@ -24,6 +24,12 @@ npm run dev
 
 브라우저에서 표시되는 로컬 주소로 접속합니다.
 
+백엔드 API와 연동해 Excel 업로드를 테스트하려면 `.env.example`을 참고해 `.env`를 만들고 프론트 서버를 다시 시작합니다.
+
+```text
+VITE_API_BASE_URL=http://127.0.0.1:5000
+```
+
 ## 3. 빌드 방법
 
 ```bash
@@ -75,6 +81,8 @@ python -m backend.app
 
 후보자 Excel 업로드는 `.xlsx` 파일을 `multipart/form-data`의 `file` 필드로 전송합니다. `dry_run=true`를 사용하면 DB 저장 없이 검증 결과만 확인합니다.
 
+프론트엔드 업로드 화면은 `VITE_API_BASE_URL`이 설정된 경우 `POST /api/candidates/upload`와 `GET /api/candidates`를 호출합니다. GitHub Pages처럼 API 주소가 없는 배포에서는 기존 Mock Data 화면을 유지합니다.
+
 ## 7. 권장 후속 개발
 
 ```text
@@ -87,8 +95,7 @@ SQLite 또는 PostgreSQL
 
 우선순위는 다음과 같습니다.
 
-1. 프론트엔드 업로드 화면과 `POST /api/candidates/upload` 연결
-2. 후보자 데이터 저장소 스키마 확장
-3. 로그인/권한 API
-4. 감사 로그 저장 API
-5. 템플릿 저장/공유 API
+1. 후보자 데이터 저장소 스키마 확장
+2. 로그인/권한 API
+3. 감사 로그 저장 API
+4. 템플릿 저장/공유 API
