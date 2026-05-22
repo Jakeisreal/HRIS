@@ -81,6 +81,7 @@ python -m backend.app
 - `POST /api/auth/logout`
 - `GET /api/candidates`
 - `POST /api/candidates/upload`
+- `GET /api/audit-logs`
 
 데모 계정은 서버 시작 시 자동 생성됩니다.
 
@@ -90,6 +91,8 @@ python -m backend.app
 후보자 Excel 업로드는 로그인 후 발급된 bearer token이 필요하며, `hr` 역할만 실행할 수 있습니다. `.xlsx` 파일을 `multipart/form-data`의 `file` 필드로 전송합니다. `dry_run=true`를 사용하면 DB 저장 없이 검증 결과만 확인합니다. 업로드 결과에는 신규, 변경, 중복, 오류 건수가 포함되며 변경 행은 필드별 변경 이력으로 저장됩니다.
 
 프론트엔드 업로드 화면은 `VITE_API_BASE_URL`이 설정된 경우 로그인 API를 호출하고, 발급된 token으로 `POST /api/candidates/upload`와 `GET /api/candidates`를 호출합니다. GitHub Pages처럼 API 주소가 없는 배포에서는 기존 Mock Data 화면을 유지합니다.
+
+감사 로그는 로그인, 후보자 목록 조회, Excel 업로드 검증/반영, 권한 차단 이벤트를 DB에 저장합니다. `GET /api/audit-logs`는 `hr` 역할 token으로만 조회할 수 있습니다.
 
 ## 7. 권장 후속 개발
 
@@ -103,6 +106,5 @@ SQLite 또는 PostgreSQL
 
 우선순위는 다음과 같습니다.
 
-1. 감사 로그 저장 API
-2. 템플릿 저장/공유 API
-3. 업로드 롤백/승인 흐름
+1. 템플릿 저장/공유 API
+2. 업로드 롤백/승인 흐름

@@ -21,10 +21,13 @@ python -m backend.app
 - `POST /api/auth/logout`: 세션 토큰 폐기
 - `GET /api/candidates`: 저장된 후보자 목록 조회
 - `POST /api/candidates/upload`: 후보자 Excel 업로드
+- `GET /api/audit-logs`: 감사 로그 조회
 
 데모 계정은 `E24017 / password`(인사담당자), `E90001 / password`(팀장/조회자)입니다.
 
 업로드는 `hr` 역할 bearer token이 필요합니다. `multipart/form-data`의 `file` 필드로 `.xlsx` 파일을 받습니다. `dry_run=true`를 함께 보내면 DB 저장 없이 컬럼 매핑과 검증 결과만 반환합니다.
+
+감사 로그 조회도 `hr` 역할 bearer token이 필요합니다. 로그인, 후보자 목록 조회, 업로드, 업로드 검증, 권한 차단 이벤트가 자동 기록됩니다.
 
 ## 필수 Excel 컬럼
 

@@ -100,6 +100,11 @@ async function uploadCandidateFile(file, { dryRun, token }) {
   }, token)
 }
 
+async function fetchAuditRows(token) {
+  const payload = await apiFetch('/api/audit-logs', {}, token)
+  return payload.items || []
+}
+
 function mapApiCandidate(row) {
   const purpose = parsePurpose(row.purpose)
   return {
@@ -368,7 +373,13 @@ function UploadPage({ onUploaded, lastUpload, setPage, authToken }) {
 
   return <div className="space-y-5 p-5"><Card><CardHeader icon={UploadCloud} title="엑셀 업로드 및 데이터 갱신" subtitle={apiReady ? "업로드 → 검증 → 최종 반영" : "API 주소가 설정되면 실제 업로드가 활성화됩니다."} /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-5">{['파일 업로드', '파일 선택', '컬럼 확인', '검증 결과', '최종 반영'].map((s, i) => <div key={s} className={`rounded-2xl p-4 text-center ring-1 ${i <= activeStep ? 'bg-slate-900 text-white ring-slate-900' : 'bg-slate-50 text-slate-700 ring-slate-200'}`}><p className="text-xs font-black">STEP {i + 1}</p><p className="mt-1 text-sm font-black">{s}</p></div>)}</div><div className="p-5 pt-0"><label onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); chooseFile(e.dataTransfer.files?.[0]) }} className="flex min-h-60 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center hover:bg-white"><FileSpreadsheet className="h-12 w-12 text-slate-500" /><h3 className="mt-4 text-xl font-black text-slate-900">{file ? file.name : '파일을 드래그하거나 클릭하여 업로드'}</h3><p className="mt-2 text-sm font-semibold text-slate-500">xlsx / 사번과 이름 필수 / dry run 검증 후 최종 반영</p><input type="file" accept=".xlsx" className="sr-only" onChange={(e) => chooseFile(e.target.files?.[0])} /></label>{!apiReady && <div className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-800 ring-1 ring-amber-100">`.env`에 `VITE_API_BASE_URL=http://127.0.0.1:5000`을 설정하고 프론트 서버를 다시 시작하면 실제 업로드를 사용할 수 있습니다.</div>}{error && <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm font-bold text-rose-800 ring-1 ring-rose-100">{error}</div>}<div className="mt-5 flex flex-wrap justify-end gap-2"><button disabled={!apiReady || !file || busy} onClick={() => runUpload(true)} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400">검증 실행</button><button disabled={!apiReady || !file || busy || !result || result.rows_error > 0} onClick={() => runUpload(false)} className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white disabled:bg-slate-300">최종 반영</button>{lastUpload && <button onClick={() => setPage('candidates')} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700">후보자 목록 보기</button>}</div></div></Card>{result && <Card><CardHeader icon={CheckCircle2} title="검증 결과" subtitle={result.file} right={<Badge tone={result.rows_error > 0 ? 'red' : 'green'}>{result.dry_run ? '검증 완료' : '반영 완료'}</Badge>} /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3 xl:grid-cols-6"><Metric label="정상 행" value={result.rows_valid} icon={CheckCircle2} tone="green" /><Metric label="신규" value={result.newRows ?? 0} icon={User} tone="blue" /><Metric label="변경" value={result.changedRows ?? 0} icon={Activity} tone="amber" /><Metric label="중복" value={result.dup ?? 0} icon={Copy} /><Metric label="오류 행" value={result.rows_error} icon={AlertTriangle} tone={result.rows_error > 0 ? 'red' : 'default'} /><Metric label="반영 건수" value={result.upserted ?? '-'} icon={Database} tone="purple" /></div>{result.headers?.length > 0 && <div className="px-5 pb-5"><p className="mb-2 text-xs font-black text-slate-500">인식된 컬럼</p><div className="flex flex-wrap gap-2">{result.headers.map((header) => <span key={header} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{header || '(빈 컬럼)'}</span>)}</div></div>}{result.errors?.length > 0 && <div className="px-5 pb-5"><div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr><th className="px-4 py-3 text-left text-xs font-black text-slate-500">행</th><th className="px-4 py-3 text-left text-xs font-black text-slate-500">오류</th></tr></thead><tbody className="divide-y divide-slate-100 bg-white">{result.errors.map((item) => <tr key={`${item.row_number}-${item.message}`}><td className="px-4 py-3 font-bold">{item.row_number}</td><td className="px-4 py-3 font-semibold text-rose-700">{item.message}</td></tr>)}</tbody></table></div></div>}</Card>}<UploadStatusPanel canManage /></div>
 }
-function AuditPage() { return <div className="space-y-5 p-5"><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="상세 조회" value="42" icon={Eye} tone="green" /><Metric label="다운로드" value="7" icon={Download} tone="amber" /><Metric label="업로드" value="3" icon={UploadCloud} tone="blue" /><Metric label="차단" value="1" icon={ShieldAlert} tone="red" /></div><Card><CardHeader icon={Activity} title="감사 로그" subtitle="조회·다운로드·업로드·권한 차단 이벤트" right={<button className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">엑셀 내보내기</button>} /><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr>{['일시', '사용자', '권한', '작업', '대상', '결과', '위험도', 'IP'].map((h) => <th key={h} className="px-5 py-3 text-left text-xs font-black text-slate-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{audits.map((a) => <tr key={`${a.time}-${a.action}`} className="hover:bg-slate-50"><td className="whitespace-nowrap px-5 py-4 font-bold text-slate-700">{a.time}</td><td className="whitespace-nowrap px-5 py-4 font-black text-slate-900">{a.user}</td><td className="whitespace-nowrap px-5 py-4 text-slate-600">{a.role}</td><td className="whitespace-nowrap px-5 py-4 font-bold text-slate-700">{a.action}</td><td className="min-w-56 px-5 py-4 text-slate-600">{a.target}</td><td className="px-5 py-4"><Badge tone={a.result === '차단' ? 'red' : 'green'}>{a.result}</Badge></td><td className="px-5 py-4"><Badge tone={a.risk === '위험' ? 'red' : a.risk === '주의' ? 'amber' : 'green'}>{a.risk}</Badge></td><td className="whitespace-nowrap px-5 py-4 text-slate-600">{a.ip}</td></tr>)}</tbody></table></div></Card></div> }
+function AuditPage({ rows = audits, status }) {
+  const detailCount = rows.filter((row) => row.action?.includes('조회')).length
+  const downloadCount = rows.filter((row) => row.action?.includes('다운로드')).length
+  const uploadCount = rows.filter((row) => row.action?.includes('업로드')).length
+  const blockedCount = rows.filter((row) => row.result === '차단').length
+  return <div className="space-y-5 p-5"><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="조회" value={detailCount} icon={Eye} tone="green" /><Metric label="다운로드" value={downloadCount} icon={Download} tone="amber" /><Metric label="업로드" value={uploadCount} icon={UploadCloud} tone="blue" /><Metric label="차단" value={blockedCount} icon={ShieldAlert} tone="red" /></div><Card><CardHeader icon={Activity} title="감사 로그" subtitle={status || "조회·다운로드·업로드·권한 차단 이벤트"} right={<button className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">엑셀 내보내기</button>} /><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr>{['일시', '사용자', '권한', '작업', '대상', '결과', '위험도', 'IP'].map((h) => <th key={h} className="px-5 py-3 text-left text-xs font-black text-slate-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{rows.map((a) => <tr key={`${a.time}-${a.action}-${a.target}`} className="hover:bg-slate-50"><td className="whitespace-nowrap px-5 py-4 font-bold text-slate-700">{a.time}</td><td className="whitespace-nowrap px-5 py-4 font-black text-slate-900">{a.user}</td><td className="whitespace-nowrap px-5 py-4 text-slate-600">{a.role}</td><td className="whitespace-nowrap px-5 py-4 font-bold text-slate-700">{a.action}</td><td className="min-w-56 px-5 py-4 text-slate-600">{a.target}</td><td className="px-5 py-4"><Badge tone={a.result === '차단' || a.result === '실패' ? 'red' : 'green'}>{a.result}</Badge></td><td className="px-5 py-4"><Badge tone={a.risk === '위험' ? 'red' : a.risk === '주의' ? 'amber' : 'green'}>{a.risk}</Badge></td><td className="whitespace-nowrap px-5 py-4 text-slate-600">{a.ip}</td></tr>)}</tbody></table></div></Card></div>
+}
 function ForbiddenPage({ setPage, role }) { return <div className="flex min-h-[calc(100vh-88px)] items-center justify-center p-6"><Card className="w-full max-w-3xl overflow-hidden"><div className="grid grid-cols-1 xl:grid-cols-[0.85fr_1.15fr]"><div className="bg-slate-950 p-8 text-white"><div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-rose-500/15 text-rose-300"><ShieldAlert className="h-9 w-9" /></div><h2 className="mt-8 text-4xl font-black tracking-tight">접근 권한이 없습니다.</h2><p className="mt-4 text-sm font-semibold leading-7 text-white/65">현재 권한으로 요청한 화면에 접근할 수 없습니다. 차단 이벤트는 감사 로그에 기록됩니다.</p></div><div className="p-8"><div className="flex flex-wrap gap-2"><Badge tone="red">403 Forbidden</Badge><Badge tone="amber">현재 권한: {role === 'hr' ? '인사담당자' : '팀장/조회자'}</Badge></div><div className="mt-6 space-y-3"><StatusRow label="요청 경로" value="/restricted" /><StatusRow label="필요 권한" value="인사담당자" /><StatusRow label="처리 방식" value="메뉴 숨김 + 서버 차단" /></div><div className="mt-6 flex justify-end gap-2"><button onClick={() => setPage('dashboard')} className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700"><Home className="inline h-4 w-4" /> 홈으로</button><button onClick={() => setPage('audit')} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white">감사 로그</button></div></div></div></Card></div> }
 
 export default function App() {
@@ -379,6 +390,8 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState(isApiEnabled() ? 'API 후보자 데이터를 조회합니다.' : 'API 주소 미설정: mock data를 표시합니다.')
   const [lastUpload, setLastUpload] = useState(null)
   const [authToken, setAuthToken] = useState('')
+  const [auditRows, setAuditRows] = useState(audits)
+  const [auditStatus, setAuditStatus] = useState(isApiEnabled() ? 'API 감사 로그를 조회합니다.' : 'API 주소 미설정: mock data를 표시합니다.')
   const [selectedCandidate, setSelectedCandidate] = useState(candidates[0])
   const [selectedIds, setSelectedIds] = useState(['E24017', 'E21884', 'E22615'])
 
@@ -406,6 +419,18 @@ export default function App() {
   const handleUploaded = async (summary) => {
     setLastUpload(summary)
     await reloadCandidates()
+    await reloadAuditRows()
+  }
+
+  const reloadAuditRows = async (token = authToken) => {
+    if (!isApiEnabled() || !token || role !== 'hr') return
+    try {
+      const rows = await fetchAuditRows(token)
+      setAuditRows(rows.length ? rows : audits)
+      setAuditStatus(`API 연동: 감사 로그 ${rows.length}건`)
+    } catch (err) {
+      setAuditStatus(`API 오류: ${err.message}`)
+    }
   }
 
   const handleLogin = async ({ employeeId, password, role: selectedRole }) => {
@@ -413,6 +438,11 @@ export default function App() {
       const payload = await loginApi(employeeId, password)
       setAuthToken(payload.token)
       setRole(payload.user.role)
+      if (payload.user.role === 'hr') {
+        const rows = await fetchAuditRows(payload.token)
+        setAuditRows(rows.length ? rows : audits)
+        setAuditStatus(`API 연동: 감사 로그 ${rows.length}건`)
+      }
     } else {
       setRole(selectedRole)
     }
@@ -422,6 +452,7 @@ export default function App() {
 
   const handleLogout = () => {
     setAuthToken('')
+    setAuditRows(audits)
     setAuthed(false)
     setPage('login')
   }
@@ -434,7 +465,7 @@ export default function App() {
   else if (page === 'compare') content = <ComparePage selectedIds={selectedIds} setPage={setPage} candidateRows={candidateRows} />
   else if (page === 'templates') content = <TemplatesPage setPage={setPage} />
   else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} />
-  else if (page === 'audit') content = <AuditPage />
+  else if (page === 'audit') content = <AuditPage rows={auditRows} status={auditStatus} />
   else content = <ForbiddenPage setPage={setPage} role={role} />
   return <AppShell role={role} setRole={setRole} page={page} setPage={setPage} onLogout={handleLogout} apiAuth={isApiEnabled()}>{content}</AppShell>
 }

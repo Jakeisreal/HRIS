@@ -82,12 +82,29 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
                 (employee_id,),
             ).fetchone()
             if user is None or not user["active"] or not check_password_hash(user["password_hash"], password):
+                log_audit_event(
+                    conn,
+                    user=None,
+                    action="로그인 실패",
+                    target=employee_id or "-",
+                    result="실패",
+                    risk="주의",
+                )
+                conn.commit()
                 return jsonify({"error": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
 
             token = secrets.token_urlsafe(32)
             conn.execute(
                 "INSERT INTO auth_sessions (token, employee_id) VALUES (?, ?)",
                 (token, employee_id),
+            )
+            log_audit_event(
+                conn,
+                user=dict(user),
+                action="로그인",
+                target=employee_id,
+                result="성공",
+                risk="정상",
             )
             conn.commit()
 
@@ -115,13 +132,16 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
         token = get_bearer_token()
         if token:
             with connect(app.config["DB_PATH"]) as conn:
+                user = authenticate_request(conn)
                 conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+                log_audit_event(conn, user=user, action="로그아웃", target="-", result="성공", risk="정상")
                 conn.commit()
         return jsonify({"ok": True})
 
     @app.get("/api/candidates")
     def list_candidates():
         with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
             rows = conn.execute(
                 f"""
                 SELECT {", ".join(CANDIDATE_FIELDS)}, updated_at
@@ -129,6 +149,40 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
                 ORDER BY updated_at DESC, employee_id ASC
                 """
             ).fetchall()
+            log_audit_event(
+                conn,
+                user=user,
+                action="후보자 목록 조회",
+                target=f"{len(rows)}명",
+                result="성공",
+                risk="정상",
+            )
+            conn.commit()
+        return jsonify({"items": [dict(row) for row in rows]})
+
+    @app.get("/api/audit-logs")
+    def list_audit_logs():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                log_audit_event(conn, user=None, action="감사 로그 조회", target="/api/audit-logs", result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            if user["role"] != "hr":
+                log_audit_event(conn, user=user, action="감사 로그 조회", target="/api/audit-logs", result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
+
+            rows = conn.execute(
+                """
+                SELECT occurred_at AS time, user_name AS user, role, action, target, result, risk, ip_address AS ip
+                FROM audit_logs
+                ORDER BY occurred_at DESC, id DESC
+                LIMIT 200
+                """
+            ).fetchall()
+            log_audit_event(conn, user=user, action="감사 로그 조회", target="/api/audit-logs", result="성공", risk="주의")
+            conn.commit()
         return jsonify({"items": [dict(row) for row in rows]})
 
     @app.post("/api/candidates/upload")
@@ -136,8 +190,14 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
         with connect(app.config["DB_PATH"]) as conn:
             user = authenticate_request(conn)
         if user is None:
+            with connect(app.config["DB_PATH"]) as conn:
+                log_audit_event(conn, user=None, action="엑셀 업로드", target="/api/candidates/upload", result="차단", risk="위험")
+                conn.commit()
             return jsonify({"error": "인증이 필요합니다."}), 401
         if user["role"] != "hr":
+            with connect(app.config["DB_PATH"]) as conn:
+                log_audit_event(conn, user=user, action="엑셀 업로드", target="/api/candidates/upload", result="차단", risk="위험")
+                conn.commit()
             return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
 
         uploaded = request.files.get("file")
@@ -164,6 +224,9 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
         summary["change_details"] = change_summary["changes"][:100]
 
         if dry_run:
+            with connect(app.config["DB_PATH"]) as conn:
+                log_audit_event(conn, user=user, action="엑셀 업로드 검증", target=uploaded.filename, result="성공", risk="정상")
+                conn.commit()
             return jsonify(summary)
 
         with connect(app.config["DB_PATH"]) as conn:
@@ -171,6 +234,14 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
             upserted = upsert_candidates(conn, [candidate.data for candidate in result.candidates])
             save_upload_changes(conn, run_id, change_summary["changes"])
             save_upload_errors(conn, run_id, result.errors)
+            log_audit_event(
+                conn,
+                user=user,
+                action="엑셀 업로드",
+                target=uploaded.filename,
+                result="성공",
+                risk="주의" if result.errors else "정상",
+            )
             conn.commit()
 
         summary["upload_run_id"] = run_id
@@ -263,6 +334,20 @@ def init_db(db_path: str) -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(employee_id) REFERENCES users(employee_id)
             );
+
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                occurred_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                employee_id TEXT,
+                user_name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                result TEXT NOT NULL,
+                risk TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                detail_json TEXT
+            );
             """
         )
         ensure_candidate_columns(conn)
@@ -328,6 +413,37 @@ def authenticate_request(conn: sqlite3.Connection) -> dict[str, Any] | None:
         (token,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def log_audit_event(
+    conn: sqlite3.Connection,
+    user: dict[str, Any] | None,
+    action: str,
+    target: str,
+    result: str,
+    risk: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    user = user or {}
+    conn.execute(
+        """
+        INSERT INTO audit_logs (
+            employee_id, user_name, role, action, target, result, risk, ip_address, detail_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user.get("employee_id"),
+            user.get("name") or "Anonymous",
+            user.get("role") or "anonymous",
+            action,
+            target,
+            result,
+            risk,
+            request.headers.get("X-Forwarded-For", request.remote_addr or "-").split(",")[0].strip(),
+            json.dumps(detail, ensure_ascii=False) if detail else None,
+        ),
+    )
 
 
 def create_upload_run(conn: sqlite3.Connection, filename: str, summary: dict[str, Any]) -> int:
