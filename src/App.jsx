@@ -147,6 +147,8 @@ async function shareTemplate(templateId, token) {
 
 function mapApiCandidate(row) {
   const purpose = parsePurpose(row.purpose)
+  const languageScore = normalizeLanguageScore(row.language_score, row.language, row.language_type)
+  const language = formatLanguage(row.language, row.language_type, languageScore)
   return {
     id: row.employee_id,
     name: row.name,
@@ -159,8 +161,8 @@ function mapApiCandidate(row) {
     performance2025: row.performance_2025 || row.performance || '-',
     performance2026: row.performance_2026 || row.performance || '-',
     leadership: row.leadership || '-',
-    language: row.language || '-',
-    languageScore: Number(row.language_score || 0),
+    language,
+    languageScore,
     overseas: row.overseas || '-',
     overseasMonths: Number(row.overseas_months || 0),
     certificate: row.certificate || '-',
@@ -172,6 +174,25 @@ function mapApiCandidate(row) {
     strengths: ['업로드 데이터 반영'],
     cautions: [],
   }
+}
+
+function normalizeLanguageScore(...values) {
+  for (const value of values) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric) && numeric > 0) return numeric
+    const match = String(value || '').match(/\d{2,4}/)
+    if (match) return Number(match[0])
+  }
+  return 0
+}
+
+function formatLanguage(language, languageType, languageScore) {
+  const name = String(languageType || language || '').trim()
+  const cleanName = /^\d+$/.test(name) ? '어학' : name
+  if (languageScore > 0 && cleanName && !String(cleanName).includes(String(languageScore))) {
+    return `${cleanName} ${languageScore}`
+  }
+  return cleanName || (languageScore > 0 ? String(languageScore) : '-')
 }
 
 function parsePurpose(value) {
@@ -456,15 +477,21 @@ function Select({ label, value, setValue, options }) { return <div><label classN
 function Range({ label, value, setValue, min, max, step }) { return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><input type="range" min={min} max={max} step={step} value={value} onChange={(e) => setValue(Number(e.target.value))} className="w-full" /></div> }
 function CandidateTable({ rows, selectedIds, toggle, setPage, setSelectedCandidate }) { return <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr>{['', '이름', '사번', '부서', '직위', '근속', '평가', '어학', '해외', '적합도', '상세'].map((h) => <th key={h} className="whitespace-nowrap px-4 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{rows.map((c) => <tr key={c.id} className="hover:bg-slate-50"><td className="px-4 py-4"><input type="checkbox" checked={selectedIds.includes(c.id)} disabled={!selectedIds.includes(c.id) && selectedIds.length >= 3} onChange={() => toggle(c.id)} /></td><td className="whitespace-nowrap px-4 py-4 font-black text-slate-900">{c.name}</td><td className="whitespace-nowrap px-4 py-4 font-semibold text-slate-600">{c.id}</td><td className="whitespace-nowrap px-4 py-4 text-slate-700">{c.dept}</td><td className="whitespace-nowrap px-4 py-4 text-slate-700">{c.position}</td><td className="whitespace-nowrap px-4 py-4 text-slate-700">{c.tenure}년</td><td className="px-4 py-4"><Badge tone={String(c.performance || '').startsWith('A') ? 'green' : 'default'}>{c.performance}</Badge></td><td className="whitespace-nowrap px-4 py-4 text-slate-700">{c.language}</td><td className="whitespace-nowrap px-4 py-4 text-slate-700">{c.overseas}</td><td className="px-4 py-4 font-black text-slate-900">{c.expatFit}</td><td className="px-4 py-4"><button onClick={() => { setSelectedCandidate(c); setPage('detail') }} className="rounded-xl px-3 py-2 text-xs font-black text-slate-700 hover:bg-slate-200">상세</button></td></tr>)}</tbody></table></div> }
 
-function DetailPage({ candidate, setPage, setSelectedIds }) {
+function DetailPage({ candidate, setPage, setSelectedIds, selectedIds }) {
   const c = candidate || candidates[0]
-  const addCompare = () => setSelectedIds((prev) => prev.includes(c.id) ? prev : prev.length >= 3 ? prev : [...prev, c.id])
+  const addCompare = () => {
+    setSelectedIds((prev) => {
+      if (prev.includes(c.id)) return prev
+      return prev.length >= 3 ? [...prev.slice(1), c.id] : [...prev, c.id]
+    })
+    setPage('compare')
+  }
   const history = getWorkHistory(c)
   return (
     <div className="space-y-5 p-5">
       <div className="flex flex-wrap justify-between gap-3">
         <button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700"><ArrowLeft className="h-4 w-4" /> 목록으로</button>
-        <div className="flex gap-2"><button onClick={addCompare} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white">비교 대상 추가</button><button className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">요약 내보내기</button></div>
+        <div className="flex gap-2"><button onClick={addCompare} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white">{selectedIds?.includes(c.id) ? '비교 화면으로' : '비교 대상 추가'}</button><button className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">요약 내보내기</button></div>
       </div>
       <Card className="overflow-hidden">
         <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr]">
@@ -715,7 +742,7 @@ export default function App() {
   let content
   if (page === 'dashboard') content = <DashboardPage setPage={setPage} role={role} candidateRows={candidateRows} setSelectedCandidate={setSelectedCandidate} templateRows={templateRows} onApplyTemplate={applyTemplate} />
   else if (page === 'candidates') content = <CandidatesPage setPage={setPage} setSelectedCandidate={setSelectedCandidate} selectedIds={selectedIds} setSelectedIds={setSelectedIds} candidateRows={candidateRows} apiStatus={apiStatus} filterState={candidateFilter} setFilterState={setCandidateFilter} onSaveTemplate={saveCurrentTemplate} templateStatus={templateStatus} />
-  else if (page === 'detail') content = <DetailPage candidate={selectedCandidate} setPage={setPage} setSelectedIds={setSelectedIds} />
+  else if (page === 'detail') content = <DetailPage candidate={selectedCandidate} setPage={setPage} setSelectedIds={setSelectedIds} selectedIds={selectedIds} />
   else if (page === 'compare') content = <ComparePage selectedIds={selectedIds} setPage={setPage} candidateRows={candidateRows} />
   else if (page === 'templates') content = <TemplatesPage setPage={setPage} rows={templateRows} onApply={applyTemplate} onShare={shareTemplateItem} status={templateStatus} />
   else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} />

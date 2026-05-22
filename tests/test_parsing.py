@@ -35,6 +35,18 @@ class CandidateWorkbookParsingTest(unittest.TestCase):
         self.assertEqual(len(result.errors), 1)
         self.assertEqual(result.errors[0].row_number, 2)
 
+    def test_language_score_header_maps_to_numeric_score(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["사번", "이름", "어학", "어학점수", "어학종류"])
+        sheet.append(["E24017", "김도현", "TOEIC", 890, "TOEIC"])
+
+        result = parse_candidate_workbook(_to_bytes(workbook))
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(result.candidates[0].data["language"], "TOEIC")
+        self.assertEqual(result.candidates[0].data["language_score"], 890)
+
 
 def _to_bytes(workbook):
     buffer = BytesIO()
