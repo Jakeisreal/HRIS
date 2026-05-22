@@ -4,6 +4,7 @@ import json
 import os
 import secrets
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -185,6 +186,117 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
             conn.commit()
         return jsonify({"items": [dict(row) for row in rows]})
 
+    @app.get("/api/templates")
+    def list_templates():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            rows = fetch_templates_for_user(conn, user)
+            log_audit_event(conn, user=user, action="템플릿 목록 조회", target=f"{len(rows)}건", result="성공", risk="정상")
+            conn.commit()
+        return jsonify({"items": [template_row_to_dict(row) for row in rows]})
+
+    @app.post("/api/templates")
+    def create_template():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            if user["role"] != "hr":
+                log_audit_event(conn, user=user, action="템플릿 생성", target="/api/templates", result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
+
+            payload = request.get_json(silent=True) or {}
+            template = normalize_template_payload(payload)
+            if not template["name"]:
+                return jsonify({"error": "템플릿 이름이 필요합니다."}), 400
+            template_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO templates (
+                    id, name, purpose, scope, owner_employee_id, owner_name, filters_json, filter_state_json, count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template_id,
+                    template["name"],
+                    template["purpose"],
+                    template["scope"],
+                    user["employee_id"],
+                    user["name"],
+                    json.dumps(template["filters"], ensure_ascii=False),
+                    json.dumps(template["filter_state"], ensure_ascii=False),
+                    template["count"],
+                ),
+            )
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            log_audit_event(conn, user=user, action="템플릿 생성", target=template["name"], result="성공", risk="정상")
+            conn.commit()
+        return jsonify({"item": template_row_to_dict(row)}), 201
+
+    @app.put("/api/templates/<template_id>")
+    def update_template(template_id):
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "템플릿을 찾을 수 없습니다."}), 404
+            if not can_modify_template(row, user):
+                log_audit_event(conn, user=user, action="템플릿 수정", target=template_id, result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "템플릿 수정 권한이 없습니다."}), 403
+
+            payload = request.get_json(silent=True) or {}
+            template = normalize_template_payload(payload, existing=template_row_to_dict(row))
+            conn.execute(
+                """
+                UPDATE templates
+                SET name = ?, purpose = ?, scope = ?, filters_json = ?, filter_state_json = ?,
+                    count = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    template["name"],
+                    template["purpose"],
+                    template["scope"],
+                    json.dumps(template["filters"], ensure_ascii=False),
+                    json.dumps(template["filter_state"], ensure_ascii=False),
+                    template["count"],
+                    template_id,
+                ),
+            )
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            log_audit_event(conn, user=user, action="템플릿 수정", target=template["name"], result="성공", risk="정상")
+            conn.commit()
+        return jsonify({"item": template_row_to_dict(row)})
+
+    @app.post("/api/templates/<template_id>/share")
+    def share_template(template_id):
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "템플릿을 찾을 수 없습니다."}), 404
+            if not can_modify_template(row, user):
+                log_audit_event(conn, user=user, action="템플릿 공유", target=template_id, result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "템플릿 공유 권한이 없습니다."}), 403
+            conn.execute(
+                "UPDATE templates SET scope = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                ("인사팀 공유", template_id),
+            )
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            log_audit_event(conn, user=user, action="템플릿 공유", target=row["name"], result="성공", risk="정상")
+            conn.commit()
+        return jsonify({"item": template_row_to_dict(row)})
+
     @app.post("/api/candidates/upload")
     def upload_candidates():
         with connect(app.config["DB_PATH"]) as conn:
@@ -348,10 +460,25 @@ def init_db(db_path: str) -> None:
                 ip_address TEXT NOT NULL,
                 detail_json TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS templates (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                owner_employee_id TEXT,
+                owner_name TEXT NOT NULL,
+                filters_json TEXT NOT NULL,
+                filter_state_json TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
         ensure_candidate_columns(conn)
         seed_demo_users(conn)
+        seed_default_templates(conn)
 
 
 def ensure_candidate_columns(conn: sqlite3.Connection) -> None:
@@ -391,6 +518,56 @@ def seed_demo_users(conn: sqlite3.Connection) -> None:
             )
 
 
+def seed_default_templates(conn: sqlite3.Connection) -> None:
+    defaults = [
+        {
+            "id": "expat-basic",
+            "name": "주재원 기본 템플릿",
+            "purpose": "주재원",
+            "scope": "기본 제공",
+            "owner_employee_id": None,
+            "owner_name": "System",
+            "filters": ["TOEIC 800 이상", "최근 평가 A 이상", "해외 경험 보유", "근속 5년 이상"],
+            "filter_state": {"purpose": "주재원", "minLanguage": 800, "overseasOnly": True},
+            "count": 86,
+        },
+        {
+            "id": "leader-basic",
+            "name": "차기 팀장 기본 템플릿",
+            "purpose": "차기 팀장",
+            "scope": "기본 제공",
+            "owner_employee_id": None,
+            "owner_name": "System",
+            "filters": ["최근 3년 평균 B+ 이상", "리더십 A 이상", "근속 7년 이상", "조직관리 가능성"],
+            "filter_state": {"purpose": "차기 팀장", "minLanguage": 700, "overseasOnly": False},
+            "count": 124,
+        },
+    ]
+    for template in defaults:
+        exists = conn.execute("SELECT 1 FROM templates WHERE id = ?", (template["id"],)).fetchone()
+        if exists is None:
+            conn.execute(
+                """
+                INSERT INTO templates (
+                    id, name, purpose, scope, owner_employee_id, owner_name,
+                    filters_json, filter_state_json, count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template["id"],
+                    template["name"],
+                    template["purpose"],
+                    template["scope"],
+                    template["owner_employee_id"],
+                    template["owner_name"],
+                    json.dumps(template["filters"], ensure_ascii=False),
+                    json.dumps(template["filter_state"], ensure_ascii=False),
+                    template["count"],
+                ),
+            )
+
+
 def get_bearer_token() -> str | None:
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
@@ -413,6 +590,75 @@ def authenticate_request(conn: sqlite3.Connection) -> dict[str, Any] | None:
         (token,),
     ).fetchone()
     return dict(row) if row else None
+
+
+def fetch_templates_for_user(conn: sqlite3.Connection, user: dict[str, Any]) -> list[sqlite3.Row]:
+    if user["role"] == "hr":
+        return conn.execute(
+            """
+            SELECT * FROM templates
+            WHERE scope IN ('기본 제공', '인사팀 공유')
+               OR owner_employee_id = ?
+            ORDER BY updated_at DESC, name ASC
+            """,
+            (user["employee_id"],),
+        ).fetchall()
+    return conn.execute(
+        """
+        SELECT * FROM templates
+        WHERE scope IN ('기본 제공', '인사팀 공유')
+        ORDER BY updated_at DESC, name ASC
+        """
+    ).fetchall()
+
+
+def template_row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    return {
+        "id": data["id"],
+        "name": data["name"],
+        "purpose": data["purpose"],
+        "scope": data["scope"],
+        "owner_employee_id": data.get("owner_employee_id"),
+        "owner": data["owner_name"],
+        "filters": json.loads(data["filters_json"]),
+        "filter_state": json.loads(data["filter_state_json"]),
+        "count": data["count"],
+        "created_at": data.get("created_at"),
+        "updated_at": data.get("updated_at"),
+    }
+
+
+def normalize_template_payload(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    existing = existing or {}
+    filter_state = payload.get("filter_state") or existing.get("filter_state") or {}
+    filters = payload.get("filters") or existing.get("filters") or describe_filter_state(filter_state)
+    return {
+        "name": str(payload.get("name") or existing.get("name") or "").strip(),
+        "purpose": str(payload.get("purpose") or existing.get("purpose") or filter_state.get("purpose") or "전체"),
+        "scope": str(payload.get("scope") or existing.get("scope") or "나만 보기"),
+        "filters": filters,
+        "filter_state": filter_state,
+        "count": int(payload.get("count") if payload.get("count") is not None else existing.get("count") or 0),
+    }
+
+
+def describe_filter_state(filter_state: dict[str, Any]) -> list[str]:
+    labels = []
+    purpose = filter_state.get("purpose")
+    if purpose and purpose != "전체":
+        labels.append(f"{purpose} 목적")
+    if filter_state.get("minLanguage") is not None:
+        labels.append(f"어학 {filter_state['minLanguage']} 이상")
+    if filter_state.get("overseasOnly"):
+        labels.append("해외 경험 보유")
+    return labels or ["전체 후보"]
+
+
+def can_modify_template(row: sqlite3.Row, user: dict[str, Any]) -> bool:
+    if user["role"] != "hr":
+        return False
+    return row["scope"] == "기본 제공" or row["owner_employee_id"] in (None, user["employee_id"])
 
 
 def log_audit_event(

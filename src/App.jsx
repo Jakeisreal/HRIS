@@ -110,6 +110,23 @@ async function fetchAuditRows(token) {
   return payload.items || []
 }
 
+async function fetchTemplates(token) {
+  const payload = await apiFetch('/api/templates', {}, token)
+  return payload.items || []
+}
+
+async function createTemplate(payload, token) {
+  return apiFetch('/api/templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }, token)
+}
+
+async function shareTemplate(templateId, token) {
+  return apiFetch(`/api/templates/${templateId}/share`, { method: 'POST' }, token)
+}
+
 function mapApiCandidate(row) {
   const purpose = parsePurpose(row.purpose)
   return {
@@ -154,6 +171,14 @@ function validateDemoLogin(employeeId, password, selectedRole) {
     throw new Error(`선택한 접속 유형이 계정 권한과 다릅니다. 이 계정은 ${user.role === 'hr' ? '인사담당자' : '팀장/조회자'} 권한입니다.`)
   }
   return user
+}
+
+function describeClientFilter(filterState) {
+  const labels = []
+  if (filterState.purpose && filterState.purpose !== '전체') labels.push(`${filterState.purpose} 목적`)
+  labels.push(`어학 ${filterState.minLanguage} 이상`)
+  if (filterState.overseasOnly) labels.push('해외 경험 보유')
+  return labels
 }
 
 const nav = [
@@ -296,14 +321,14 @@ function AppShell({ role, page, setPage, onLogout, children }) {
   )
 }
 
-function DashboardPage({ setPage, role, candidateRows, setSelectedCandidate }) {
+function DashboardPage({ setPage, role, candidateRows, setSelectedCandidate, templateRows, onApplyTemplate }) {
   const canManage = role === 'hr'
   return (
     <div className="space-y-5 p-5">
       <Card className="overflow-hidden"><div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]"><div className="p-6"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">데이터 정상 연동</Badge><Badge tone="amber">오류 5건 확인 필요</Badge></div><h2 className="mt-5 text-4xl font-black leading-tight tracking-tight text-slate-900">데이터 기반 후보자 선별을 한 화면에서 시작합니다.</h2><p className="mt-4 max-w-3xl text-base font-semibold leading-7 text-slate-500">목적별 템플릿을 적용해 후보군을 압축하고, 상세 대시보드와 비교 화면에서 평가·어학·리더십·해외 경험을 검토합니다.</p><div className="mt-6 flex flex-wrap gap-2"><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-sm"><Globe2 className="h-4 w-4" /> 주재원 후보 선별</button><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><BriefcaseBusiness className="h-4 w-4" /> 차기 팀장 후보 선별</button></div></div><div className="border-t border-slate-100 bg-slate-50 p-6 xl:border-l xl:border-t-0"><div className="rounded-3xl bg-white p-5 ring-1 ring-slate-200"><p className="text-xs font-bold text-slate-500">최근 데이터 기준일</p><p className="mt-1 text-2xl font-black text-slate-900">2026.05.22</p><div className="mt-5 space-y-3"><StatusRow label="검증 성공" value="1,180건" /><StatusRow label="오류" value="5건" danger /><StatusRow label="최근 업로드" value="09:34" /></div></div></div></div></Card>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"><Metric label="전체 후보자" value="1,248" sub="최근 업로드 기준" icon={Users} /><Metric label="주재원 후보" value="86" sub="기본 템플릿 기준" icon={Globe2} tone="blue" /><Metric label="차기 팀장 후보" value="124" sub="기본 템플릿 기준" icon={BriefcaseBusiness} tone="amber" /><Metric label="데이터 오류" value="5" sub="검증 결과 확인 필요" icon={AlertTriangle} tone="red" /></div>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_390px]"><Card><CardHeader icon={LayoutDashboard} title="빠른 실행" subtitle="주요 업무 화면으로 즉시 이동합니다." /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2"><QuickAction title="후보자 목록" desc="검색·필터·정렬로 후보군 압축" icon={Search} onClick={() => setPage('candidates')} primary /><QuickAction title="후보자 비교" desc="선택 후보 2~3명 비교" icon={BarChart3} onClick={() => setPage('compare')} primary />{canManage && <QuickAction title="엑셀 업로드" desc="원천 데이터 갱신" icon={UploadCloud} onClick={() => setPage('upload')} />}{canManage && <QuickAction title="감사 로그" desc="조회·다운로드 이력 추적" icon={ShieldCheck} onClick={() => setPage('audit')} />}</div></Card><NoticePanel /></div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><RecommendedPanel setPage={setPage} rows={candidateRows} setSelectedCandidate={setSelectedCandidate} /><RecentTemplatePanel setPage={setPage} canManage={canManage} /></div>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><RecommendedPanel setPage={setPage} rows={candidateRows} setSelectedCandidate={setSelectedCandidate} /><RecentTemplatePanel setPage={setPage} canManage={canManage} templates={templateRows} onApply={onApplyTemplate} /></div>
       <UploadStatusPanel setPage={setPage} canManage={canManage} />
     </div>
   )
@@ -315,15 +340,15 @@ function NoticePanel() { return <Card><CardHeader icon={AlertTriangle} title="�
 function Notice({ tone, icon: Icon, title, desc }) { const cls = tone === 'red' ? 'bg-rose-50 text-rose-800 ring-rose-100' : tone === 'blue' ? 'bg-blue-50 text-blue-800 ring-blue-100' : 'bg-amber-50 text-amber-800 ring-amber-100'; return <div className={`rounded-2xl p-4 ring-1 ${cls}`}><div className="flex items-start gap-3"><Icon className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="text-sm font-black">{title}</p><p className="mt-1 text-sm font-semibold leading-6 opacity-90">{desc}</p></div></div></div> }
 function RecommendedPanel({ setPage, rows = candidates, setSelectedCandidate }) { const sorted = [...rows].sort((a, b) => b.expatFit - a.expatFit).slice(0, 4); return <Card><CardHeader icon={Star} title="추천 후보 Top 4" subtitle="기본 템플릿 기준 상위 후보" /><div className="space-y-3 p-5">{sorted.map((c, idx) => <CandidateMini key={c.id} candidate={c} rank={idx + 1} onClick={() => { setSelectedCandidate?.(c); setPage('detail') }} />)}</div></Card> }
 function CandidateMini({ candidate, rank, onClick }) { return <button onClick={onClick} className="w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"><div className="flex items-start justify-between gap-3"><div className="flex items-start gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 text-sm font-black text-white">{rank}</div><div><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-black text-slate-900">{candidate.name}</p><Badge tone="blue">주재원 {candidate.expatFit}</Badge></div><p className="mt-1 text-xs font-semibold text-slate-500">{candidate.id} · {candidate.dept} · {candidate.position}</p><p className="mt-2 text-sm font-semibold text-slate-600">{candidate.strengths.join(' · ')}</p></div></div><ChevronRight className="h-4 w-4 text-slate-400" /></div></button> }
-function RecentTemplatePanel({ setPage, canManage }) { return <Card><CardHeader icon={Filter} title="최근 사용 템플릿" subtitle="저장된 조건 즉시 적용" right={canManage ? <button onClick={() => setPage('templates')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">관리</button> : <Badge tone="amber">조회 권한</Badge>} /><div className="space-y-3 p-5">{templates.map((t) => <TemplateRow key={t.id} template={t} onApply={() => setPage('candidates')} />)}</div></Card> }
+function RecentTemplatePanel({ setPage, canManage, templates: rows = templates, onApply }) { return <Card><CardHeader icon={Filter} title="최근 사용 템플릿" subtitle="저장된 조건 즉시 적용" right={canManage ? <button onClick={() => setPage('templates')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">관리</button> : <Badge tone="amber">조회 권한</Badge>} /><div className="space-y-3 p-5">{rows.slice(0, 4).map((t) => <TemplateRow key={t.id} template={t} onApply={() => onApply?.(t)} />)}</div></Card> }
 function TemplateRow({ template, onApply }) { return <div className="rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-black text-slate-900">{template.name}</p><Badge tone={template.purpose === '주재원' ? 'blue' : 'amber'}>{template.purpose}</Badge></div><p className="mt-1 text-xs font-semibold text-slate-500">{template.scope} · 소유자 {template.owner}</p></div><div className="text-right"><p className="text-xl font-black text-slate-900">{template.count}</p><p className="text-xs font-bold text-slate-500">후보</p></div></div><div className="mt-3 flex justify-end"><button onClick={onApply} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div> }
 function UploadStatusPanel({ setPage, canManage }) { return <Card><CardHeader icon={Database} title="최근 업로드 및 데이터 상태" subtitle="후보자 마스터 기준일과 검증 결과" right={canManage && <button onClick={() => setPage?.('upload')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">새 업로드</button>} /><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr>{['파일명', '업로드', '행 수', '신규', '변경', '중복', '오류', '상태'].map((h) => <th key={h} className="px-5 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{uploads.map((row) => <tr key={row.file} className="hover:bg-slate-50"><td className="min-w-64 px-5 py-4 font-black text-slate-900">{row.file}</td><td className="whitespace-nowrap px-5 py-4"><p className="font-bold text-slate-700">{row.at}</p><p className="text-xs font-semibold text-slate-500">{row.user}</p></td><td className="px-5 py-4 font-bold">{row.rows}</td><td className="px-5 py-4 font-bold text-blue-700">{row.newRows}</td><td className="px-5 py-4 font-bold text-amber-700">{row.changes}</td><td className="px-5 py-4 font-bold text-slate-600">{row.dup}</td><td className="px-5 py-4 font-bold text-rose-700">{row.errors}</td><td className="px-5 py-4"><Badge tone={row.errors > 0 ? 'red' : 'green'}>{row.status}</Badge></td></tr>)}</tbody></table></div></Card> }
 
-function CandidatesPage({ setPage, setSelectedCandidate, selectedIds, setSelectedIds, candidateRows, apiStatus }) {
+function CandidatesPage({ setPage, setSelectedCandidate, selectedIds, setSelectedIds, candidateRows, apiStatus, filterState, setFilterState, onSaveTemplate, templateStatus }) {
   const [query, setQuery] = useState('')
-  const [purpose, setPurpose] = useState('전체')
-  const [minLanguage, setMinLanguage] = useState(700)
-  const [overseasOnly, setOverseasOnly] = useState(false)
+  const purpose = filterState.purpose
+  const minLanguage = filterState.minLanguage
+  const overseasOnly = filterState.overseasOnly
   const filtered = useMemo(() => candidateRows.filter((c) => {
     const text = `${c.name} ${c.id} ${c.dept}`.toLowerCase().includes(query.toLowerCase())
     const purposeOk = purpose === '전체' || c.purpose.includes(purpose)
@@ -332,7 +357,7 @@ function CandidatesPage({ setPage, setSelectedCandidate, selectedIds, setSelecte
     return text && purposeOk && langOk && overseasOk
   }).sort((a, b) => b.expatFit - a.expatFit), [candidateRows, query, purpose, minLanguage, overseasOnly])
   const toggle = (id) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 3 ? prev : [...prev, id])
-  return <div className="grid grid-cols-1 gap-5 p-5 xl:grid-cols-[320px_minmax(0,1fr)]"><Card><CardHeader icon={Filter} title="필터 조건" subtitle="검색 결과에 실시간 반영" /><div className="space-y-4 p-5"><Select label="선별 목적" value={purpose} setValue={setPurpose} options={['전체', '주재원', '차기 팀장']} /><Range label={`최소 어학 점수 ${minLanguage}`} value={minLanguage} setValue={setMinLanguage} min={600} max={950} step={10} /><label className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-slate-200">해외 경험자만<input type="checkbox" checked={overseasOnly} onChange={(e) => setOverseasOnly(e.target.checked)} /></label><button className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white">템플릿 저장</button></div></Card><Card className="overflow-hidden"><CardHeader icon={Users} title={`검색 결과 ${filtered.length}명`} subtitle={apiStatus} right={<div className="flex gap-2"><button disabled={selectedIds.length < 2} onClick={() => setPage('compare')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white disabled:bg-slate-300">선택 비교</button><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">엑셀</button></div>} /><div className="border-b border-slate-100 p-5"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="이름, 사번, 부서 검색" className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm font-semibold outline-none focus:border-slate-900 focus:bg-white" /></div></div><CandidateTable rows={filtered} toggle={toggle} selectedIds={selectedIds} setPage={setPage} setSelectedCandidate={setSelectedCandidate} /></Card></div>
+  return <div className="grid grid-cols-1 gap-5 p-5 xl:grid-cols-[320px_minmax(0,1fr)]"><Card><CardHeader icon={Filter} title="필터 조건" subtitle="검색 결과에 실시간 반영" /><div className="space-y-4 p-5"><Select label="선별 목적" value={purpose} setValue={(value) => setFilterState((prev) => ({ ...prev, purpose: value }))} options={['전체', '주재원', '차기 팀장']} /><Range label={`최소 어학 점수 ${minLanguage}`} value={minLanguage} setValue={(value) => setFilterState((prev) => ({ ...prev, minLanguage: value }))} min={600} max={950} step={10} /><label className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-slate-200">해외 경험자만<input type="checkbox" checked={overseasOnly} onChange={(e) => setFilterState((prev) => ({ ...prev, overseasOnly: e.target.checked }))} /></label><button onClick={() => onSaveTemplate?.(filtered.length)} className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white">템플릿 저장</button>{templateStatus && <p className="text-xs font-bold text-slate-500">{templateStatus}</p>}</div></Card><Card className="overflow-hidden"><CardHeader icon={Users} title={`검색 결과 ${filtered.length}명`} subtitle={apiStatus} right={<div className="flex gap-2"><button disabled={selectedIds.length < 2} onClick={() => setPage('compare')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white disabled:bg-slate-300">선택 비교</button><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">엑셀</button></div>} /><div className="border-b border-slate-100 p-5"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="이름, 사번, 부서 검색" className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm font-semibold outline-none focus:border-slate-900 focus:bg-white" /></div></div><CandidateTable rows={filtered} toggle={toggle} selectedIds={selectedIds} setPage={setPage} setSelectedCandidate={setSelectedCandidate} /></Card></div>
 }
 function Select({ label, value, setValue, options }) { return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><select value={value} onChange={(e) => setValue(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-black outline-none focus:border-slate-900">{options.map((o) => <option key={o}>{o}</option>)}</select></div> }
 function Range({ label, value, setValue, min, max, step }) { return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><input type="range" min={min} max={max} step={step} value={value} onChange={(e) => setValue(Number(e.target.value))} className="w-full" /></div> }
@@ -355,8 +380,13 @@ function ComparePage({ selectedIds, setPage, candidateRows }) {
 function CompareCard({ c, top }) { return <div className={`rounded-3xl border p-5 ${top ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white'}`}><div className="flex items-center justify-between"><Badge tone={top ? 'amber' : 'default'}>{top ? '추천 1순위' : '비교 후보'}</Badge><p className="text-2xl font-black">{c.expatFit}</p></div><h3 className="mt-5 text-2xl font-black">{c.name}</h3><p className={`mt-1 text-sm font-semibold ${top ? 'text-white/70' : 'text-slate-500'}`}>{c.id} · {c.dept} · {c.position}</p><div className={`mt-5 space-y-2 text-sm font-semibold ${top ? 'text-white/70' : 'text-slate-600'}`}>{(c.strengths || []).map((s) => <p key={s}>· {s}</p>)}</div></div> }
 function labelOf(key) { return { dept: '부서', position: '직위', performance: '평가', leadership: '리더십', language: '어학', overseas: '해외 경험', certificate: '자격', expatFit: '주재원 적합도', leaderFit: '팀장 적합도' }[key] || key }
 
-function TemplatesPage({ setPage }) { return <div className="space-y-5 p-5"><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="전체 템플릿" value={templates.length} icon={Filter} /><Metric label="기본 제공" value="2" icon={Star} /><Metric label="공유 중" value="1" icon={Share2} /><Metric label="개인" value="1" icon={Lock} /></div><div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{templates.map((t) => <TemplateCard key={t.id} t={t} setPage={setPage} />)}</div></div> }
-function TemplateCard({ t, setPage }) { return <Card><div className="p-5"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-black text-slate-900">{t.name}</h3><Badge tone={t.purpose === '주재원' ? 'blue' : 'amber'}>{t.purpose}</Badge><Badge>{t.scope}</Badge></div><p className="mt-2 text-sm font-semibold text-slate-500">소유자 {t.owner} · 예상 후보 {t.count}명</p></div><button className="rounded-xl p-2 hover:bg-slate-100"><Settings2 className="h-5 w-5" /></button></div><div className="mt-4 flex flex-wrap gap-1.5">{t.filters.map((f) => <span key={f} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{f}</span>)}</div><div className="mt-5 flex justify-end gap-2"><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"><Copy className="inline h-3.5 w-3.5" /> 복제</button><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"><Share2 className="inline h-3.5 w-3.5" /> 공유</button><button onClick={() => setPage('candidates')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div></Card> }
+function TemplatesPage({ setPage, rows = templates, onApply, onShare, status }) {
+  const shared = rows.filter((t) => t.scope === '인사팀 공유').length
+  const defaults = rows.filter((t) => t.scope === '기본 제공').length
+  const personal = rows.filter((t) => t.scope === '나만 보기').length
+  return <div className="space-y-5 p-5"><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="전체 템플릿" value={rows.length} icon={Filter} /><Metric label="기본 제공" value={defaults} icon={Star} /><Metric label="공유 중" value={shared} icon={Share2} /><Metric label="개인" value={personal} icon={Lock} /></div>{status && <div className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-600 ring-1 ring-slate-200">{status}</div>}<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{rows.map((t) => <TemplateCard key={t.id} t={t} setPage={setPage} onApply={onApply} onShare={onShare} />)}</div></div>
+}
+function TemplateCard({ t, setPage, onApply, onShare }) { return <Card><div className="p-5"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-black text-slate-900">{t.name}</h3><Badge tone={t.purpose === '주재원' ? 'blue' : 'amber'}>{t.purpose}</Badge><Badge>{t.scope}</Badge></div><p className="mt-2 text-sm font-semibold text-slate-500">소유자 {t.owner} · 예상 후보 {t.count}명</p></div><button className="rounded-xl p-2 hover:bg-slate-100"><Settings2 className="h-5 w-5" /></button></div><div className="mt-4 flex flex-wrap gap-1.5">{(t.filters || []).map((f) => <span key={f} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{f}</span>)}</div><div className="mt-5 flex justify-end gap-2"><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"><Copy className="inline h-3.5 w-3.5" /> 복제</button><button disabled={t.scope === '인사팀 공유'} onClick={() => onShare?.(t)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"><Share2 className="inline h-3.5 w-3.5" /> 공유</button><button onClick={() => { onApply?.(t); setPage('candidates') }} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div></Card> }
 function UploadPage({ onUploaded, lastUpload, setPage, authToken }) {
   const [file, setFile] = useState(null)
   const [result, setResult] = useState(null)
@@ -408,6 +438,9 @@ export default function App() {
   const [authToken, setAuthToken] = useState('')
   const [auditRows, setAuditRows] = useState(audits)
   const [auditStatus, setAuditStatus] = useState(isApiEnabled() ? 'API 감사 로그를 조회합니다.' : 'API 주소 미설정: mock data를 표시합니다.')
+  const [templateRows, setTemplateRows] = useState(templates)
+  const [templateStatus, setTemplateStatus] = useState(isApiEnabled() ? 'API 템플릿을 조회합니다.' : 'API 주소 미설정: mock template을 표시합니다.')
+  const [candidateFilter, setCandidateFilter] = useState({ purpose: '전체', minLanguage: 700, overseasOnly: false })
   const [selectedCandidate, setSelectedCandidate] = useState(candidates[0])
   const [selectedIds, setSelectedIds] = useState(['E24017', 'E21884', 'E22615'])
 
@@ -449,6 +482,74 @@ export default function App() {
     }
   }
 
+  const reloadTemplates = async (token = authToken) => {
+    if (!isApiEnabled() || !token) return
+    try {
+      const rows = await fetchTemplates(token)
+      setTemplateRows(rows.length ? rows : templates)
+      setTemplateStatus(`API 연동: 템플릿 ${rows.length}건`)
+    } catch (err) {
+      setTemplateStatus(`API 오류: ${err.message}`)
+    }
+  }
+
+  const applyTemplate = (template) => {
+    if (template?.filter_state) {
+      setCandidateFilter((prev) => ({ ...prev, ...template.filter_state }))
+    }
+    setPage('candidates')
+  }
+
+  const saveCurrentTemplate = async (count) => {
+    const name = `${candidateFilter.purpose === '전체' ? '전체 후보' : candidateFilter.purpose} 템플릿 ${new Date().toLocaleDateString('ko-KR')}`
+    if (!isApiEnabled()) {
+      const localTemplate = {
+        id: `local-${Date.now()}`,
+        name,
+        purpose: candidateFilter.purpose,
+        scope: '나만 보기',
+        count,
+        owner: 'Local',
+        filters: describeClientFilter(candidateFilter),
+        filter_state: candidateFilter,
+      }
+      setTemplateRows((prev) => [localTemplate, ...prev])
+      setTemplateStatus('시연 모드: 브라우저 상태에 템플릿을 저장했습니다.')
+      return
+    }
+    try {
+      const payload = await createTemplate({
+        name,
+        purpose: candidateFilter.purpose,
+        scope: '나만 보기',
+        count,
+        filters: describeClientFilter(candidateFilter),
+        filter_state: candidateFilter,
+      }, authToken)
+      setTemplateRows((prev) => [payload.item, ...prev])
+      setTemplateStatus('템플릿을 저장했습니다.')
+      await reloadAuditRows()
+    } catch (err) {
+      setTemplateStatus(`저장 실패: ${err.message}`)
+    }
+  }
+
+  const shareTemplateItem = async (template) => {
+    if (!isApiEnabled()) {
+      setTemplateRows((prev) => prev.map((item) => item.id === template.id ? { ...item, scope: '인사팀 공유' } : item))
+      setTemplateStatus('시연 모드: 공유 상태로 변경했습니다.')
+      return
+    }
+    try {
+      const payload = await shareTemplate(template.id, authToken)
+      setTemplateRows((prev) => prev.map((item) => item.id === template.id ? payload.item : item))
+      setTemplateStatus('템플릿을 공유했습니다.')
+      await reloadAuditRows()
+    } catch (err) {
+      setTemplateStatus(`공유 실패: ${err.message}`)
+    }
+  }
+
   const handleLogin = async ({ employeeId, password, role: selectedRole }) => {
     if (isApiEnabled()) {
       const payload = await loginApi(employeeId, password)
@@ -462,6 +563,9 @@ export default function App() {
         setAuditRows(rows.length ? rows : audits)
         setAuditStatus(`API 연동: 감사 로그 ${rows.length}건`)
       }
+      const templateItems = await fetchTemplates(payload.token)
+      setTemplateRows(templateItems.length ? templateItems : templates)
+      setTemplateStatus(`API 연동: 템플릿 ${templateItems.length}건`)
     } else {
       const user = validateDemoLogin(employeeId, password, selectedRole)
       setRole(user.role)
@@ -473,17 +577,18 @@ export default function App() {
   const handleLogout = () => {
     setAuthToken('')
     setAuditRows(audits)
+    setTemplateRows(templates)
     setAuthed(false)
     setPage('login')
   }
 
   if (!authed || page === 'login') return <LoginPage onLogin={handleLogin} role={role} setRole={setRole} />
   let content
-  if (page === 'dashboard') content = <DashboardPage setPage={setPage} role={role} candidateRows={candidateRows} setSelectedCandidate={setSelectedCandidate} />
-  else if (page === 'candidates') content = <CandidatesPage setPage={setPage} setSelectedCandidate={setSelectedCandidate} selectedIds={selectedIds} setSelectedIds={setSelectedIds} candidateRows={candidateRows} apiStatus={apiStatus} />
+  if (page === 'dashboard') content = <DashboardPage setPage={setPage} role={role} candidateRows={candidateRows} setSelectedCandidate={setSelectedCandidate} templateRows={templateRows} onApplyTemplate={applyTemplate} />
+  else if (page === 'candidates') content = <CandidatesPage setPage={setPage} setSelectedCandidate={setSelectedCandidate} selectedIds={selectedIds} setSelectedIds={setSelectedIds} candidateRows={candidateRows} apiStatus={apiStatus} filterState={candidateFilter} setFilterState={setCandidateFilter} onSaveTemplate={saveCurrentTemplate} templateStatus={templateStatus} />
   else if (page === 'detail') content = <DetailPage candidate={selectedCandidate} setPage={setPage} setSelectedIds={setSelectedIds} />
   else if (page === 'compare') content = <ComparePage selectedIds={selectedIds} setPage={setPage} candidateRows={candidateRows} />
-  else if (page === 'templates') content = <TemplatesPage setPage={setPage} />
+  else if (page === 'templates') content = <TemplatesPage setPage={setPage} rows={templateRows} onApply={applyTemplate} onShare={shareTemplateItem} status={templateStatus} />
   else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} />
   else if (page === 'audit') content = <AuditPage rows={auditRows} status={auditStatus} />
   else content = <ForbiddenPage setPage={setPage} role={role} />

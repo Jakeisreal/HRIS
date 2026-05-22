@@ -82,6 +82,10 @@ python -m backend.app
 - `GET /api/candidates`
 - `POST /api/candidates/upload`
 - `GET /api/audit-logs`
+- `GET /api/templates`
+- `POST /api/templates`
+- `PUT /api/templates/<id>`
+- `POST /api/templates/<id>/share`
 
 데모 계정은 서버 시작 시 자동 생성됩니다.
 
@@ -96,6 +100,8 @@ python -m backend.app
 
 감사 로그는 로그인, 후보자 목록 조회, Excel 업로드 검증/반영, 권한 차단 이벤트를 DB에 저장합니다. `GET /api/audit-logs`는 `hr` 역할 token으로만 조회할 수 있습니다.
 
+템플릿은 기본 제공, 인사팀 공유, 나만 보기 범위를 지원합니다. 조회자는 기본 제공/공유 템플릿만 볼 수 있고, 인사담당자는 개인 템플릿 저장과 공유 전환을 할 수 있습니다.
+
 ## 7. 권장 후속 개발
 
 ```text
@@ -108,5 +114,5 @@ SQLite 또는 PostgreSQL
 
 우선순위는 다음과 같습니다.
 
-1. 템플릿 저장/공유 API
-2. 업로드 롤백/승인 흐름
+1. 업로드 롤백/승인 흐름
+2. 템플릿 수정/삭제 UI 고도화
