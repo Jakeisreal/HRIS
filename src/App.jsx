@@ -108,8 +108,8 @@ async function loginApi(employeeId, password) {
   })
 }
 
-async function fetchCandidateRows() {
-  const payload = await apiFetch('/api/candidates')
+async function fetchCandidateRows(token) {
+  const payload = await apiFetch('/api/candidates', {}, token)
   return (payload.items || []).map(mapApiCandidate)
 }
 
@@ -576,10 +576,10 @@ export default function App() {
   const [selectedCandidate, setSelectedCandidate] = useState(candidates[0])
   const [selectedIds, setSelectedIds] = useState(['E24017', 'E21884', 'E22615'])
 
-  const reloadCandidates = async () => {
-    if (!isApiEnabled()) return
+  const reloadCandidates = async (token = authToken) => {
+    if (!isApiEnabled() || !token) return
     try {
-      const rows = await fetchCandidateRows()
+      const rows = await fetchCandidateRows(token)
       if (rows.length) {
         setCandidateRows(rows)
         setSelectedCandidate((current) => rows.find((row) => row.id === current?.id) || rows[0])
@@ -593,13 +593,9 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    reloadCandidates()
-  }, [])
-
   const handleUploaded = async (summary) => {
     setLastUpload(summary)
-    await reloadCandidates()
+    await reloadCandidates(authToken)
     await reloadAuditRows()
   }
 
@@ -690,6 +686,7 @@ export default function App() {
       }
       setAuthToken(payload.token)
       setRole(payload.user.role)
+      await reloadCandidates(payload.token)
       if (payload.user.role === 'hr') {
         const rows = await fetchAuditRows(payload.token)
         setAuditRows(rows.length ? rows : audits)
