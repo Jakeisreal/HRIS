@@ -5,6 +5,7 @@ import os
 import secrets
 import sqlite3
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -49,14 +50,31 @@ CANDIDATE_FIELDS = (
 CHANGE_TRACKED_FIELDS = tuple(field for field in CANDIDATE_FIELDS if field != "employee_id")
 
 
+DEFAULT_SESSION_TTL_SECONDS = int(os.environ.get("HRIS_AUTH_SESSION_TTL_SECONDS", 8 * 3600))
+MAX_UPLOAD_BYTES = int(os.environ.get("HRIS_MAX_UPLOAD_BYTES", 10 * 1024 * 1024))
+
+DEMO_PASSWORD_DEFAULT = os.environ.get("HRIS_DEMO_PASSWORD", "password")
+DEMO_PASSWORDS = {
+    "hr": os.environ.get("HRIS_DEMO_PASSWORD_HR", DEMO_PASSWORD_DEFAULT),
+    "viewer": os.environ.get("HRIS_DEMO_PASSWORD_VIEWER", DEMO_PASSWORD_DEFAULT),
+}
+
+
 def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
     app = Flask(__name__)
+    app.testing = bool(os.environ.get("PYTEST_CURRENT_TEST"))
     app.config["DB_PATH"] = str(db_path or os.environ.get("HRIS_DB_PATH", DEFAULT_DB_PATH))
     init_db(app.config["DB_PATH"])
 
     @app.after_request
     def add_cors_headers(response):
-        response.headers["Access-Control-Allow-Origin"] = os.environ.get("HRIS_CORS_ORIGIN", "*")
+        allowed_origin = os.environ.get("HRIS_CORS_ORIGIN")
+        if not allowed_origin:
+            if app.testing:
+                allowed_origin = "http://localhost"
+            else:
+                raise RuntimeError("HRIS_CORS_ORIGIN environment 변수가 설정되어 있어야 합니다.")
+        response.headers["Access-Control-Allow-Origin"] = allowed_origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         return response
@@ -95,9 +113,10 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
                 return jsonify({"error": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
 
             token = secrets.token_urlsafe(32)
+            expires_at = (datetime.utcnow() + timedelta(seconds=DEFAULT_SESSION_TTL_SECONDS)).strftime("%Y-%m-%d %H:%M:%S")
             conn.execute(
-                "INSERT INTO auth_sessions (token, employee_id) VALUES (?, ?)",
-                (token, employee_id),
+                "INSERT INTO auth_sessions (token, employee_id, expires_at) VALUES (?, ?, ?)",
+                (token, employee_id, expires_at),
             )
             log_audit_event(
                 conn,
@@ -143,6 +162,17 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
     def list_candidates():
         with connect(app.config["DB_PATH"]) as conn:
             user = authenticate_request(conn)
+            if user is None:
+                log_audit_event(
+                    conn,
+                    user=None,
+                    action="후보자 목록 조회",
+                    target="/api/candidates",
+                    result="차단",
+                    risk="위험",
+                )
+                conn.commit()
+                return jsonify({"error": "인증이 필요합니다."}), 401
             rows = conn.execute(
                 f"""
                 SELECT {", ".join(CANDIDATE_FIELDS)}, updated_at
@@ -318,6 +348,20 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
         if not uploaded.filename.lower().endswith(".xlsx"):
             return jsonify({"error": "xlsx 파일만 업로드할 수 있습니다."}), 400
 
+        if uploaded.content_length is not None and uploaded.content_length > MAX_UPLOAD_BYTES:
+            return jsonify({"error": f"파일 크기는 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 이하만 허용합니다."}), 400
+
+        uploaded.stream.seek(0, os.SEEK_END)
+        file_size = uploaded.stream.tell()
+        uploaded.stream.seek(0)
+        if file_size > MAX_UPLOAD_BYTES:
+            return jsonify({"error": f"파일 크기는 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 이하만 허용합니다."}), 400
+
+        header = uploaded.stream.read(4)
+        uploaded.stream.seek(0)
+        if header != b"PK\x03\x04":
+            return jsonify({"error": "유효하지 않은 파일 형식입니다."}), 400
+
         result = parse_candidate_workbook(uploaded.stream)
         dry_run = request.form.get("dry_run", "").lower() in {"1", "true", "yes"}
         summary: dict[str, Any] = {
@@ -359,6 +403,41 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
         summary["upload_run_id"] = run_id
         summary["upserted"] = upserted
         return jsonify(summary), 201
+
+    @app.post("/api/upload-runs/<int:run_id>/rollback")
+    def rollback_upload(run_id):
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                log_audit_event(conn, user=None, action="업로드 롤백", target=str(run_id), result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            if user["role"] != "hr":
+                log_audit_event(conn, user=user, action="업로드 롤백", target=str(run_id), result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
+
+            changes = conn.execute(
+                "SELECT employee_id, change_type, field_name, old_value FROM upload_changes WHERE upload_run_id = ? ORDER BY id DESC",
+                (run_id,),
+            ).fetchall()
+            if not changes:
+                return jsonify({"error": "Rollback 대상 업로드를 찾을 수 없습니다."}), 404
+
+            for change in changes:
+                employee_id = change["employee_id"]
+                if change["change_type"] == "new":
+                    conn.execute("DELETE FROM candidates WHERE employee_id = ?", (employee_id,))
+                elif change["change_type"] == "changed" and change["field_name"] in CHANGE_TRACKED_FIELDS:
+                    conn.execute(
+                        f"UPDATE candidates SET {change['field_name']} = ? WHERE employee_id = ?",
+                        (change["old_value"], employee_id),
+                    )
+
+            log_audit_event(conn, user=user, action="업로드 롤백", target=str(run_id), result="성공", risk="주의")
+            conn.commit()
+
+        return jsonify({"ok": True, "run_id": run_id})
 
     return app
 
@@ -444,6 +523,7 @@ def init_db(db_path: str) -> None:
                 token TEXT PRIMARY KEY,
                 employee_id TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                expires_at TEXT,
                 FOREIGN KEY(employee_id) REFERENCES users(employee_id)
             );
 
@@ -477,6 +557,7 @@ def init_db(db_path: str) -> None:
             """
         )
         ensure_candidate_columns(conn)
+        ensure_auth_session_columns(conn)
         seed_demo_users(conn)
         seed_default_templates(conn)
 
@@ -500,13 +581,19 @@ def ensure_candidate_columns(conn: sqlite3.Connection) -> None:
         if column not in existing:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} {column_type}")
 
+def ensure_auth_session_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(auth_sessions)").fetchall()}
+    if "expires_at" not in existing:
+        conn.execute("ALTER TABLE auth_sessions ADD COLUMN expires_at TEXT")
+
 
 def seed_demo_users(conn: sqlite3.Connection) -> None:
     users = [
-        ("E24017", "김도현", "hr", "password"),
-        ("E90001", "박민수", "viewer", "password"),
+        ("E24017", "김도현", "hr"),
+        ("E90001", "박민수", "viewer"),
     ]
-    for employee_id, name, role, password in users:
+    for employee_id, name, role in users:
+        password = DEMO_PASSWORDS.get(role, DEMO_PASSWORD_DEFAULT)
         exists = conn.execute("SELECT 1 FROM users WHERE employee_id = ?", (employee_id,)).fetchone()
         if exists is None:
             conn.execute(
@@ -585,7 +672,9 @@ def authenticate_request(conn: sqlite3.Connection) -> dict[str, Any] | None:
         SELECT users.employee_id, users.name, users.role
         FROM auth_sessions
         JOIN users ON users.employee_id = auth_sessions.employee_id
-        WHERE auth_sessions.token = ? AND users.active = 1
+        WHERE auth_sessions.token = ?
+          AND users.active = 1
+          AND auth_sessions.expires_at > CURRENT_TIMESTAMP
         """,
         (token,),
     ).fetchone()

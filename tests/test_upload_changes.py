@@ -63,7 +63,7 @@ class CandidateUploadChangeTest(unittest.TestCase):
         self.assertEqual(changed[0]["employee_id"], "E2")
         self.assertEqual(changed[0]["fields"][0]["field_name"], "dept")
 
-        candidates = self.client.get("/api/candidates").json["items"]
+        candidates = self.client.get("/api/candidates", headers={"Authorization": f"Bearer {self.token}"}).json["items"]
         e2 = next(candidate for candidate in candidates if candidate["employee_id"] == "E2")
         self.assertEqual(e2["dept"], "해외영업팀")
         self.assertEqual(e2["job_family"], "영업")

@@ -56,6 +56,11 @@ class AuthApiTest(unittest.TestCase):
         )
         self.assertEqual(viewer.status_code, 403)
 
+    def test_candidate_list_requires_auth(self):
+        response = self.client.get("/api/candidates")
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json["error"], "인증이 필요합니다.")
+
     def _login(self, employee_id):
         response = self.client.post(
             "/api/auth/login",
