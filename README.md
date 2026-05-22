@@ -27,6 +27,7 @@ npm run dev
 ## 3. 빌드 방법
 
 ```bash
+npm ci
 npm run build
 npm run preview
 ```
@@ -51,15 +52,30 @@ https://<GitHub아이디>.github.io/<저장소명>/
 
 ## 5. 현재 버전의 한계
 
-현재 버전은 프론트엔드 프로토타입입니다.
+현재 GitHub Pages 배포 버전은 프론트엔드 프로토타입입니다.
 
 - 데이터는 Mock Data입니다.
 - 실제 로그인 인증은 구현되어 있지 않습니다.
-- 엑셀 업로드는 화면 흐름만 구현되어 있습니다.
+- 엑셀 업로드 API 초안은 `backend/`에 추가되어 있으나, 배포된 GitHub Pages 화면에는 아직 연결되어 있지 않습니다.
 - 감사 로그는 예시 데이터입니다.
-- 실제 업무 운영에는 Flask/API/DB 연동이 필요합니다.
+- 실제 업무 운영에는 Flask API 서버 배포와 프론트엔드 API 연동이 필요합니다.
 
-## 6. 권장 후속 개발
+## 6. 백엔드 API 초안
+
+```bash
+pip install -r requirements.txt
+python -m backend.app
+```
+
+기본 API 주소는 `http://127.0.0.1:5000`입니다.
+
+- `GET /api/health`
+- `GET /api/candidates`
+- `POST /api/candidates/upload`
+
+후보자 Excel 업로드는 `.xlsx` 파일을 `multipart/form-data`의 `file` 필드로 전송합니다. `dry_run=true`를 사용하면 DB 저장 없이 검증 결과만 확인합니다.
+
+## 7. 권장 후속 개발
 
 ```text
 React Frontend
@@ -71,8 +87,8 @@ SQLite 또는 PostgreSQL
 
 우선순위는 다음과 같습니다.
 
-1. 실제 후보자 Excel 업로드 API
-2. 후보자 데이터 저장소 구축
+1. 프론트엔드 업로드 화면과 `POST /api/candidates/upload` 연결
+2. 후보자 데이터 저장소 스키마 확장
 3. 로그인/권한 API
 4. 감사 로그 저장 API
 5. 템플릿 저장/공유 API
