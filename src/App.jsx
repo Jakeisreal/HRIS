@@ -65,6 +65,19 @@ const demoUsers = {
   E90001: { password: 'password', role: 'viewer', name: '박민수' },
 }
 
+const DEFAULT_CANDIDATE_FILTER = {
+  purpose: '전체',
+  dept: '전체',
+  position: '전체',
+  performance: '전체',
+  leadership: '전체',
+  minLanguage: 700,
+  minTenure: 0,
+  minExpatFit: 0,
+  minLeaderFit: 0,
+  overseasOnly: false,
+}
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
 function isApiEnabled() {
@@ -229,9 +242,20 @@ function validateDemoLogin(employeeId, password, selectedRole) {
 function describeClientFilter(filterState) {
   const labels = []
   if (filterState.purpose && filterState.purpose !== '전체') labels.push(`${filterState.purpose} 목적`)
+  if (filterState.dept && filterState.dept !== '전체') labels.push(`${filterState.dept} 소속`)
+  if (filterState.position && filterState.position !== '전체') labels.push(`${filterState.position} 직위`)
+  if (filterState.performance && filterState.performance !== '전체') labels.push(`평가 ${filterState.performance}`)
+  if (filterState.leadership && filterState.leadership !== '전체') labels.push(`리더십 ${filterState.leadership}`)
   labels.push(`어학 ${filterState.minLanguage} 이상`)
+  if (filterState.minTenure > 0) labels.push(`근속 ${filterState.minTenure}년 이상`)
+  if (filterState.minExpatFit > 0) labels.push(`주재원 적합도 ${filterState.minExpatFit} 이상`)
+  if (filterState.minLeaderFit > 0) labels.push(`팀장 적합도 ${filterState.minLeaderFit} 이상`)
   if (filterState.overseasOnly) labels.push('해외 경험 보유')
   return labels
+}
+
+function uniqueOptions(rows, key) {
+  return ['전체', ...Array.from(new Set(rows.map((row) => row[key]).filter((value) => value && value !== '-'))).sort()]
 }
 
 const nav = [
@@ -399,18 +423,34 @@ function UploadStatusPanel({ setPage, canManage }) { return <Card><CardHeader ic
 
 function CandidatesPage({ setPage, setSelectedCandidate, selectedIds, setSelectedIds, candidateRows, apiStatus, filterState, setFilterState, onSaveTemplate, templateStatus }) {
   const [query, setQuery] = useState('')
-  const purpose = filterState.purpose
-  const minLanguage = filterState.minLanguage
-  const overseasOnly = filterState.overseasOnly
+  const state = { ...DEFAULT_CANDIDATE_FILTER, ...filterState }
+  const deptOptions = useMemo(() => uniqueOptions(candidateRows, 'dept'), [candidateRows])
+  const positionOptions = useMemo(() => uniqueOptions(candidateRows, 'position'), [candidateRows])
+  const performanceOptions = useMemo(() => uniqueOptions(candidateRows, 'performance'), [candidateRows])
+  const leadershipOptions = useMemo(() => uniqueOptions(candidateRows, 'leadership'), [candidateRows])
   const filtered = useMemo(() => candidateRows.filter((c) => {
     const text = `${c.name} ${c.id} ${c.dept}`.toLowerCase().includes(query.toLowerCase())
-    const purposeOk = purpose === '전체' || c.purpose.includes(purpose)
-    const langOk = c.languageScore >= minLanguage
-    const overseasOk = !overseasOnly || c.overseasMonths > 0
-    return text && purposeOk && langOk && overseasOk
-  }).sort((a, b) => b.expatFit - a.expatFit), [candidateRows, query, purpose, minLanguage, overseasOnly])
+    const purposeOk = state.purpose === '전체' || c.purpose.includes(state.purpose)
+    const deptOk = state.dept === '전체' || c.dept === state.dept
+    const positionOk = state.position === '전체' || c.position === state.position
+    const performanceOk = state.performance === '전체' || c.performance === state.performance
+    const leadershipOk = state.leadership === '전체' || c.leadership === state.leadership
+    const langOk = c.languageScore >= state.minLanguage
+    const tenureOk = Number(c.tenure || 0) >= state.minTenure
+    const expatOk = Number(c.expatFit || 0) >= state.minExpatFit
+    const leaderOk = Number(c.leaderFit || 0) >= state.minLeaderFit
+    const overseasOk = !state.overseasOnly || c.overseasMonths > 0
+    return text && purposeOk && deptOk && positionOk && performanceOk && leadershipOk && langOk && tenureOk && expatOk && leaderOk && overseasOk
+  }).sort((a, b) => b.expatFit - a.expatFit), [candidateRows, query, state.purpose, state.dept, state.position, state.performance, state.leadership, state.minLanguage, state.minTenure, state.minExpatFit, state.minLeaderFit, state.overseasOnly])
+  const filteredIds = useMemo(() => new Set(filtered.map((candidate) => candidate.id)), [filtered])
+  const visibleSelectedCount = selectedIds.filter((id) => filteredIds.has(id)).length
+  useEffect(() => {
+    setSelectedIds((current) => current.filter((id) => filteredIds.has(id)))
+  }, [filteredIds, setSelectedIds])
   const toggle = (id) => setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= 3 ? prev : [...prev, id])
-  return <div className="grid grid-cols-1 gap-5 p-5 xl:grid-cols-[320px_minmax(0,1fr)]"><Card><CardHeader icon={Filter} title="필터 조건" subtitle="검색 결과에 실시간 반영" /><div className="space-y-4 p-5"><Select label="선별 목적" value={purpose} setValue={(value) => setFilterState((prev) => ({ ...prev, purpose: value }))} options={['전체', '주재원', '차기 팀장']} /><Range label={`최소 어학 점수 ${minLanguage}`} value={minLanguage} setValue={(value) => setFilterState((prev) => ({ ...prev, minLanguage: value }))} min={600} max={950} step={10} /><label className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-slate-200">해외 경험자만<input type="checkbox" checked={overseasOnly} onChange={(e) => setFilterState((prev) => ({ ...prev, overseasOnly: e.target.checked }))} /></label><button onClick={() => onSaveTemplate?.(filtered.length)} className="w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white">템플릿 저장</button>{templateStatus && <p className="text-xs font-bold text-slate-500">{templateStatus}</p>}</div></Card><Card className="overflow-hidden"><CardHeader icon={Users} title={`검색 결과 ${filtered.length}명`} subtitle={apiStatus} right={<div className="flex gap-2"><button disabled={selectedIds.length < 2} onClick={() => setPage('compare')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white disabled:bg-slate-300">선택 비교</button><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">엑셀</button></div>} /><div className="border-b border-slate-100 p-5"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="이름, 사번, 부서 검색" className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm font-semibold outline-none focus:border-slate-900 focus:bg-white" /></div></div><CandidateTable rows={filtered} toggle={toggle} selectedIds={selectedIds} setPage={setPage} setSelectedCandidate={setSelectedCandidate} /></Card></div>
+  const updateFilter = (key, value) => setFilterState((prev) => ({ ...DEFAULT_CANDIDATE_FILTER, ...prev, [key]: value }))
+  const resetFilter = () => setFilterState(DEFAULT_CANDIDATE_FILTER)
+  return <div className="grid grid-cols-1 gap-5 p-5 xl:grid-cols-[340px_minmax(0,1fr)]"><Card><CardHeader icon={Filter} title="필터 조건" subtitle="현재 결과 내 선택만 비교 가능" /><div className="space-y-4 p-5"><Select label="선별 목적" value={state.purpose} setValue={(value) => updateFilter('purpose', value)} options={['전체', '주재원', '차기 팀장']} /><Select label="부서" value={state.dept} setValue={(value) => updateFilter('dept', value)} options={deptOptions} /><Select label="직위" value={state.position} setValue={(value) => updateFilter('position', value)} options={positionOptions} /><div className="grid grid-cols-2 gap-3"><Select label="평가" value={state.performance} setValue={(value) => updateFilter('performance', value)} options={performanceOptions} /><Select label="리더십" value={state.leadership} setValue={(value) => updateFilter('leadership', value)} options={leadershipOptions} /></div><Range label={`최소 근속 ${state.minTenure}년`} value={state.minTenure} setValue={(value) => updateFilter('minTenure', value)} min={0} max={20} step={1} /><Range label={`최소 어학 점수 ${state.minLanguage}`} value={state.minLanguage} setValue={(value) => updateFilter('minLanguage', value)} min={0} max={950} step={10} /><Range label={`주재원 적합도 ${state.minExpatFit} 이상`} value={state.minExpatFit} setValue={(value) => updateFilter('minExpatFit', value)} min={0} max={100} step={5} /><Range label={`팀장 적합도 ${state.minLeaderFit} 이상`} value={state.minLeaderFit} setValue={(value) => updateFilter('minLeaderFit', value)} min={0} max={100} step={5} /><label className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-slate-200">해외 경험자만<input type="checkbox" checked={state.overseasOnly} onChange={(e) => updateFilter('overseasOnly', e.target.checked)} /></label><div className="grid grid-cols-2 gap-2"><button onClick={() => onSaveTemplate?.(filtered.length)} className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-black text-white">템플릿 저장</button><button onClick={resetFilter} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700">초기화</button></div>{templateStatus && <p className="text-xs font-bold text-slate-500">{templateStatus}</p>}</div></Card><Card className="overflow-hidden"><CardHeader icon={Users} title={`검색 결과 ${filtered.length}명`} subtitle={`${apiStatus} · 선택 ${visibleSelectedCount}명`} right={<div className="flex gap-2"><button disabled={visibleSelectedCount < 2} onClick={() => setPage('compare')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white disabled:bg-slate-300">선택 비교</button><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700">엑셀</button></div>} /><div className="border-b border-slate-100 p-5"><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="이름, 사번, 부서 검색" className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm font-semibold outline-none focus:border-slate-900 focus:bg-white" /></div></div><CandidateTable rows={filtered} toggle={toggle} selectedIds={selectedIds} setPage={setPage} setSelectedCandidate={setSelectedCandidate} /></Card></div>
 }
 function Select({ label, value, setValue, options }) { return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><select value={value} onChange={(e) => setValue(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-white px-3 text-sm font-black outline-none focus:border-slate-900">{options.map((o) => <option key={o}>{o}</option>)}</select></div> }
 function Range({ label, value, setValue, min, max, step }) { return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><input type="range" min={min} max={max} step={step} value={value} onChange={(e) => setValue(Number(e.target.value))} className="w-full" /></div> }
@@ -532,7 +572,7 @@ export default function App() {
   const [auditStatus, setAuditStatus] = useState(isApiEnabled() ? 'API 감사 로그를 조회합니다.' : 'API 주소 미설정: mock data를 표시합니다.')
   const [templateRows, setTemplateRows] = useState(templates)
   const [templateStatus, setTemplateStatus] = useState(isApiEnabled() ? 'API 템플릿을 조회합니다.' : 'API 주소 미설정: mock template을 표시합니다.')
-  const [candidateFilter, setCandidateFilter] = useState({ purpose: '전체', minLanguage: 700, overseasOnly: false })
+  const [candidateFilter, setCandidateFilter] = useState(DEFAULT_CANDIDATE_FILTER)
   const [selectedCandidate, setSelectedCandidate] = useState(candidates[0])
   const [selectedIds, setSelectedIds] = useState(['E24017', 'E21884', 'E22615'])
 
@@ -587,7 +627,7 @@ export default function App() {
 
   const applyTemplate = (template) => {
     if (template?.filter_state) {
-      setCandidateFilter((prev) => ({ ...prev, ...template.filter_state }))
+      setCandidateFilter((prev) => ({ ...DEFAULT_CANDIDATE_FILTER, ...prev, ...template.filter_state }))
     }
     setPage('candidates')
   }
