@@ -43,6 +43,25 @@ class AuditLogApiTest(unittest.TestCase):
         ]
         self.assertTrue(blocked_rows)
 
+    def test_audit_logs_support_filter_and_csv_export(self):
+        hr_token = self._login("E24017")
+        self.client.get("/api/candidates", headers=auth_header(hr_token))
+
+        filtered = self.client.get(
+            "/api/audit-logs?user=김도현",
+            headers=auth_header(hr_token),
+        )
+        self.assertEqual(filtered.status_code, 200)
+        self.assertTrue(all("김도현" in item["user"] for item in filtered.json["items"]))
+
+        exported = self.client.get(
+            "/api/audit-logs/export",
+            headers=auth_header(hr_token),
+        )
+        self.assertEqual(exported.status_code, 200)
+        self.assertIn("text/csv", exported.content_type)
+        self.assertIn("time,user,role,action,target,result,risk,ip", exported.get_data(as_text=True))
+
     def _login(self, employee_id):
         response = self.client.post(
             "/api/auth/login",

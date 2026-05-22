@@ -63,6 +63,45 @@ class TemplateApiTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
+    def test_hr_can_unshare_and_delete_template(self):
+        created = self.client.post(
+            "/api/templates",
+            json={
+                "name": "삭제 테스트 템플릿",
+                "purpose": "검증",
+                "scope": "나만 보기",
+                "filter_state": {"purpose": "검증", "minLanguage": 700},
+                "count": 5,
+            },
+            headers=auth_header(self.hr_token),
+        )
+        self.assertEqual(created.status_code, 201)
+        template_id = created.json["item"]["id"]
+
+        share = self.client.post(
+            f"/api/templates/{template_id}/share",
+            headers=auth_header(self.hr_token),
+        )
+        self.assertEqual(share.status_code, 200)
+        self.assertEqual(share.json["item"]["scope"], "인사팀 공유")
+
+        unshare = self.client.post(
+            f"/api/templates/{template_id}/unshare",
+            headers=auth_header(self.hr_token),
+        )
+        self.assertEqual(unshare.status_code, 200)
+        self.assertEqual(unshare.json["item"]["scope"], "나만 보기")
+
+        delete = self.client.delete(
+            f"/api/templates/{template_id}",
+            headers=auth_header(self.hr_token),
+        )
+        self.assertEqual(delete.status_code, 200)
+        self.assertTrue(delete.json["ok"])
+
+        remaining = self.client.get("/api/templates", headers=auth_header(self.hr_token))
+        self.assertNotIn(template_id, {item["id"] for item in remaining.json["items"]})
+
     def _login(self, employee_id):
         response = self.client.post(
             "/api/auth/login",

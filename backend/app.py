@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import secrets
@@ -9,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from backend.parsing import parse_candidate_workbook
@@ -204,17 +206,61 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
                 conn.commit()
                 return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
 
+            filters = parse_audit_log_query_params(request.args)
+            where_clause, params = build_audit_log_filter_query(filters)
             rows = conn.execute(
-                """
+                f"""
                 SELECT occurred_at AS time, user_name AS user, role, action, target, result, risk, ip_address AS ip
                 FROM audit_logs
+                {where_clause}
                 ORDER BY occurred_at DESC, id DESC
                 LIMIT 200
-                """
+                """,
+                params,
             ).fetchall()
-            log_audit_event(conn, user=user, action="감사 로그 조회", target="/api/audit-logs", result="성공", risk="주의")
+            log_audit_event(conn, user=user, action="감사 로그 조회", target="/api/audit-logs", result="성공", risk="주의", detail=filters)
             conn.commit()
         return jsonify({"items": [dict(row) for row in rows]})
+
+    @app.get("/api/audit-logs/export")
+    def export_audit_logs():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                log_audit_event(conn, user=None, action="감사 로그 CSV 내보내기", target="/api/audit-logs/export", result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            if user["role"] != "hr":
+                log_audit_event(conn, user=user, action="감사 로그 CSV 내보내기", target="/api/audit-logs/export", result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
+
+            filters = parse_audit_log_query_params(request.args)
+            where_clause, params = build_audit_log_filter_query(filters)
+            rows = conn.execute(
+                f"""
+                SELECT occurred_at AS time, user_name AS user, role, action, target, result, risk, ip_address AS ip
+                FROM audit_logs
+                {where_clause}
+                ORDER BY occurred_at DESC, id DESC
+                """,
+                params,
+            ).fetchall()
+
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["time", "user", "role", "action", "target", "result", "risk", "ip"])
+            for row in rows:
+                writer.writerow([row["time"], row["user"], row["role"], row["action"], row["target"], row["result"], row["risk"], row["ip"]])
+
+            log_audit_event(conn, user=user, action="감사 로그 CSV 내보내기", target="/api/audit-logs/export", result="성공", risk="주의", detail=filters)
+            conn.commit()
+
+            return Response(
+                output.getvalue(),
+                mimetype="text/csv; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename= audit_logs.csv"},
+            )
 
     @app.get("/api/templates")
     def list_templates():
@@ -326,6 +372,48 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
             log_audit_event(conn, user=user, action="템플릿 공유", target=row["name"], result="성공", risk="정상")
             conn.commit()
         return jsonify({"item": template_row_to_dict(row)})
+
+    @app.post("/api/templates/<template_id>/unshare")
+    def unshare_template(template_id):
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "템플릿을 찾을 수 없습니다."}), 404
+            if not can_modify_template(row, user):
+                log_audit_event(conn, user=user, action="템플릿 공유 해제", target=template_id, result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "템플릿 공유 해제 권한이 없습니다."}), 403
+            conn.execute(
+                "UPDATE templates SET scope = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                ("나만 보기", template_id),
+            )
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            log_audit_event(conn, user=user, action="템플릿 공유 해제", target=row["name"], result="성공", risk="정상")
+            conn.commit()
+        return jsonify({"item": template_row_to_dict(row)})
+
+    @app.delete("/api/templates/<template_id>")
+    def delete_template_route(template_id):
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            row = conn.execute("SELECT * FROM templates WHERE id = ?", (template_id,)).fetchone()
+            if row is None:
+                return jsonify({"error": "템플릿을 찾을 수 없습니다."}), 404
+            if not can_modify_template(row, user):
+                log_audit_event(conn, user=user, action="템플릿 삭제", target=template_id, result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "템플릿 삭제 권한이 없습니다."}), 403
+            deleted = delete_template(conn, template_id)
+            if deleted == 0:
+                return jsonify({"error": "템플릿 삭제에 실패했습니다."}), 500
+            log_audit_event(conn, user=user, action="템플릿 삭제", target=row["name"], result="성공", risk="주의")
+            conn.commit()
+        return jsonify({"ok": True, "id": template_id})
 
     @app.post("/api/candidates/upload")
     def upload_candidates():
@@ -699,6 +787,56 @@ def fetch_templates_for_user(conn: sqlite3.Connection, user: dict[str, Any]) -> 
         ORDER BY updated_at DESC, name ASC
         """
     ).fetchall()
+
+
+def delete_template(conn: sqlite3.Connection, template_id: str) -> int:
+    result = conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+    return result.rowcount
+
+
+def build_audit_log_filter_query(filters: dict[str, Any]) -> tuple[str, list[Any]]:
+    clauses = []
+    params: list[Any] = []
+    if filters.get("from"):
+        clauses.append("occurred_at >= ?")
+        params.append(filters["from"])
+    if filters.get("to"):
+        clauses.append("occurred_at <= ?")
+        params.append(filters["to"])
+    if filters.get("user"):
+        clauses.append("user_name LIKE ?")
+        params.append(f"%{filters['user']}%")
+    if filters.get("risk"):
+        clauses.append("risk = ?")
+        params.append(filters["risk"])
+    where_clause = "WHERE " + " AND ".join(clauses) if clauses else ""
+    return where_clause, params
+
+
+def parse_audit_log_query_params(args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "from": parse_audit_log_date(args.get("from"), start_of_day=True),
+        "to": parse_audit_log_date(args.get("to"), end_of_day=True),
+        "user": str(args.get("user") or "").strip() or None,
+        "risk": str(args.get("risk") or "").strip() or None,
+    }
+
+
+def parse_audit_log_date(value: str | None, start_of_day: bool = False, end_of_day: bool = False) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            return None
+    if start_of_day:
+        parsed = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+    if end_of_day:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=0)
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def template_row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
