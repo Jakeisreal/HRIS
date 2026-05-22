@@ -34,6 +34,8 @@ COLUMN_ALIASES = {
     "expat_fit": {"expat_fit", "expat fit", "주재원적합도", "주재원 적합도"},
     "leader_fit": {"leader_fit", "leader fit", "팀장적합도", "팀장 적합도"},
     "purpose": {"purpose", "후보목적", "선정목적"},
+    "photo_url": {"photo_url", "photo url", "사진url", "사진 URL", "사진", "프로필사진"},
+    "work_history": {"work_history", "work history", "발령내역", "근무이력", "보직이력"},
 }
 
 REQUIRED_FIELDS = ("employee_id", "name")

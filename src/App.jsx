@@ -139,8 +139,12 @@ function mapApiCandidate(row) {
     name: row.name,
     dept: row.dept || '-',
     position: row.position || '-',
+    hireDate: row.hire_date || '',
     tenure: Number(row.tenure || 0),
     performance: row.performance || '-',
+    performance2024: row.performance_2024 || row.performance || '-',
+    performance2025: row.performance_2025 || row.performance || '-',
+    performance2026: row.performance_2026 || row.performance || '-',
     leadership: row.leadership || '-',
     language: row.language || '-',
     languageScore: Number(row.language_score || 0),
@@ -149,6 +153,8 @@ function mapApiCandidate(row) {
     certificate: row.certificate || '-',
     expatFit: Number(row.expat_fit || 0),
     leaderFit: Number(row.leader_fit || 0),
+    photoUrl: row.photo_url || '',
+    workHistory: parseWorkHistory(row.work_history),
     purpose: purpose.length ? purpose : ['주재원'],
     strengths: ['업로드 데이터 반영'],
     cautions: [],
@@ -164,7 +170,49 @@ function parsePurpose(value) {
   } catch {
     // Plain Excel values are handled below.
   }
-  return String(value).split(/[,\n/]+/).map((item) => item.trim()).filter(Boolean)
+  return String(value).split(/[;,\n/]+/).map((item) => item.trim()).filter(Boolean)
+}
+
+function parseWorkHistory(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  try {
+    const parsed = JSON.parse(value)
+    if (Array.isArray(parsed)) return parsed
+  } catch {
+    // Plain Excel values are handled below.
+  }
+  return String(value).split(/[;\n]+/).map((item) => {
+    const [date, dept, position, note] = item.split('|').map((part) => part?.trim())
+    return { date: date || '-', dept: dept || '-', position: position || '-', note: note || '발령' }
+  }).filter((item) => item.date !== '-' || item.dept !== '-')
+}
+
+function getWorkHistory(candidate) {
+  if (candidate.workHistory?.length) return candidate.workHistory
+  const hireDate = candidate.hireDate || '입사일 미등록'
+  return [
+    { date: hireDate, dept: candidate.dept, position: candidate.position, note: '현재 보직' },
+    { date: '최근', dept: candidate.dept, position: candidate.position, note: candidate.overseasMonths > 0 ? candidate.overseas : '근무 이력 업로드 대기' },
+  ]
+}
+
+function gradeToScore(grade) {
+  const normalized = String(grade || '').trim().toUpperCase()
+  return { S: 5, A: 4.5, 'B+': 3.8, B: 3, C: 2, D: 1 }[normalized] ?? 0
+}
+
+function scoreToY(score) {
+  return 150 - (score / 5) * 120
+}
+
+function getPerformanceTrend(candidate) {
+  const fallback = candidate.performance || '-'
+  return [
+    { year: '2024', grade: candidate.performance2024 || fallback },
+    { year: '2025', grade: candidate.performance2025 || fallback },
+    { year: '2026', grade: candidate.performance2026 || fallback },
+  ].map((item) => ({ ...item, score: gradeToScore(item.grade) }))
 }
 
 function validateDemoLogin(employeeId, password, selectedRole) {
@@ -371,9 +419,48 @@ function CandidateTable({ rows, selectedIds, toggle, setPage, setSelectedCandida
 function DetailPage({ candidate, setPage, setSelectedIds }) {
   const c = candidate || candidates[0]
   const addCompare = () => setSelectedIds((prev) => prev.includes(c.id) ? prev : prev.length >= 3 ? prev : [...prev, c.id])
-  return <div className="space-y-5 p-5"><div className="flex flex-wrap justify-between gap-3"><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700"><ArrowLeft className="h-4 w-4" /> 목록으로</button><div className="flex gap-2"><button onClick={addCompare} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white">비교 대상 추가</button><button className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">요약 내보내기</button></div></div><Card className="overflow-hidden"><div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr]"><div className="p-6"><div className="flex items-center gap-5"><div className="flex h-24 w-24 items-center justify-center rounded-3xl bg-slate-900 text-3xl font-black text-white">{c.name[0]}</div><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-3xl font-black tracking-tight">{c.name}</h2>{(c.purpose || []).map((p) => <Badge key={p} tone={p === '주재원' ? 'blue' : 'amber'}>{p}</Badge>)}</div><p className="mt-2 text-sm font-semibold text-slate-600">{c.id} · {c.dept} · {c.position} · 근속 {c.tenure}년</p></div></div></div><div className="border-t border-slate-100 bg-slate-50 p-6 xl:border-l xl:border-t-0"><div className="grid grid-cols-2 gap-3"><InfoBox label="주재원 적합도" value={c.expatFit} /><InfoBox label="팀장 적합도" value={c.leaderFit} /><InfoBox label="어학" value={c.language} /><InfoBox label="해외 경험" value={c.overseas} /></div></div></div></Card><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="최근 평가" value={c.performance} icon={Star} tone="green" /><Metric label="리더십" value={c.leadership} icon={ShieldCheck} tone="blue" /><Metric label="어학" value={c.language} icon={Globe2} /><Metric label="자격" value={c.certificate} icon={CheckCircle2} tone="amber" /></div><div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><PanelList title="강점" icon={CheckCircle2} items={c.strengths || []} tone="green" /><PanelList title="확인 필요" icon={AlertTriangle} items={c.cautions || []} tone="amber" /></div><Card><CardHeader icon={BarChart3} title="평가/리더십 추이" subtitle="실제 구현 시 최근 3년 평가 추이와 항목별 리더십 차트 표시" /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-5">{['2024 A', '2025 A', '2026 B+', '코칭 A', '실행력 A'].map((v) => <div key={v} className="rounded-2xl bg-slate-50 p-4 text-center ring-1 ring-slate-200"><p className="text-lg font-black text-slate-900">{v}</p></div>)}</div></Card></div>
+  const history = getWorkHistory(c)
+  return (
+    <div className="space-y-5 p-5">
+      <div className="flex flex-wrap justify-between gap-3">
+        <button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700"><ArrowLeft className="h-4 w-4" /> 목록으로</button>
+        <div className="flex gap-2"><button onClick={addCompare} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-black text-white">비교 대상 추가</button><button className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700">요약 내보내기</button></div>
+      </div>
+      <Card className="overflow-hidden">
+        <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="p-6">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+              <CandidatePhoto candidate={c} />
+              <div>
+                <div className="flex flex-wrap items-center gap-2"><h2 className="text-3xl font-black tracking-tight">{c.name}</h2>{(c.purpose || []).map((p) => <Badge key={p} tone={p === '주재원' ? 'blue' : 'amber'}>{p}</Badge>)}</div>
+                <p className="mt-2 text-sm font-semibold text-slate-600">{c.id} · {c.dept} · {c.position} · 근속 {c.tenure}년</p>
+                <p className="mt-3 text-xs font-bold text-slate-400">{c.photoUrl ? '인사 프로필 사진 연동' : '사진 미등록: 업로드 데이터의 사진URL 컬럼을 표시합니다.'}</p>
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-slate-100 bg-slate-50 p-6 xl:border-l xl:border-t-0"><div className="grid grid-cols-2 gap-3"><InfoBox label="주재원 적합도" value={c.expatFit} /><InfoBox label="팀장 적합도" value={c.leaderFit} /><InfoBox label="어학" value={c.language} /><InfoBox label="해외 경험" value={c.overseas} /></div></div>
+        </div>
+      </Card>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="최근 평가" value={c.performance} icon={Star} tone="green" /><Metric label="리더십" value={c.leadership} icon={ShieldCheck} tone="blue" /><Metric label="어학" value={c.language} icon={Globe2} /><Metric label="자격" value={c.certificate} icon={CheckCircle2} tone="amber" /></div>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <WorkHistoryPanel rows={history} />
+        <TrendChartPanel candidate={c} />
+      </div>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><PanelList title="강점" icon={CheckCircle2} items={c.strengths || []} tone="green" /><PanelList title="확인 필요" icon={AlertTriangle} items={c.cautions || []} tone="amber" /></div>
+    </div>
+  )
 }
+function CandidatePhoto({ candidate }) { return candidate.photoUrl ? <img src={candidate.photoUrl} alt={`${candidate.name} 프로필`} className="h-28 w-28 shrink-0 rounded-3xl object-cover ring-1 ring-slate-200" /> : <div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-3xl bg-slate-900 text-4xl font-black text-white ring-1 ring-slate-800">{candidate.name?.[0] || '?'}</div> }
 function InfoBox({ label, value }) { return <div className="rounded-2xl bg-white p-4 ring-1 ring-slate-200"><p className="text-xs font-bold text-slate-500">{label}</p><p className="mt-1 text-lg font-black text-slate-900">{value}</p></div> }
+function WorkHistoryPanel({ rows }) { return <Card><CardHeader icon={BriefcaseBusiness} title="근무이력 / 발령내역" subtitle="업로드 데이터의 발령내역 컬럼 기준" /><div className="space-y-4 p-5">{rows.map((row, idx) => <div key={`${row.date}-${row.dept}-${idx}`} className="relative pl-7"><div className="absolute left-1.5 top-1 h-3 w-3 rounded-full bg-slate-900 ring-4 ring-slate-100" />{idx < rows.length - 1 && <div className="absolute bottom-[-18px] left-[11px] top-5 w-px bg-slate-200" />}<div className="rounded-2xl bg-slate-50 p-4 ring-1 ring-slate-200"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-black text-slate-900">{row.dept}</p><span className="text-xs font-black text-slate-500">{row.date}</span></div><p className="mt-1 text-sm font-semibold text-slate-600">{row.position}</p><p className="mt-2 text-xs font-bold text-slate-500">{row.note}</p></div></div>)}</div></Card> }
+function TrendChartPanel({ candidate }) {
+  const trend = getPerformanceTrend(candidate)
+  const points = trend.map((item, idx) => ({ ...item, x: 58 + idx * 132, y: item.score ? scoreToY(item.score) : 150 }))
+  const line = points.map((point) => `${point.x},${point.y}`).join(' ')
+  const leaderScore = gradeToScore(candidate.leadership)
+  const leaderY = leaderScore ? scoreToY(leaderScore) : 150
+  return <Card><CardHeader icon={BarChart3} title="평가/리더십 추이" subtitle="최근 3년 평가 등급을 점수화한 꺾은선 그래프" /><div className="p-5"><div className="overflow-x-auto"><svg viewBox="0 0 380 190" className="min-h-52 w-full min-w-[360px]"><g className="text-slate-300">{[30, 60, 90, 120, 150].map((y) => <line key={y} x1="42" x2="350" y1={y} y2={y} stroke="currentColor" strokeWidth="1" />)}</g><polyline points={line} fill="none" stroke="#0f172a" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />{points.map((point) => <g key={point.year}><circle cx={point.x} cy={point.y} r="7" fill="#0f172a" /><text x={point.x} y="176" textAnchor="middle" className="fill-slate-500 text-xs font-bold">{point.year}</text><text x={point.x} y={point.y - 14} textAnchor="middle" className="fill-slate-900 text-sm font-black">{point.grade}</text></g>)}<line x1="42" x2="350" y1={leaderY} y2={leaderY} stroke="#2563eb" strokeDasharray="6 6" strokeWidth="2" /><text x="350" y={Math.max(16, leaderY - 8)} textAnchor="end" className="fill-blue-700 text-xs font-black">리더십 {candidate.leadership}</text></svg></div><div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4"><InfoBox label="2024 평가" value={trend[0].grade} /><InfoBox label="2025 평가" value={trend[1].grade} /><InfoBox label="2026 평가" value={trend[2].grade} /><InfoBox label="리더십" value={candidate.leadership} /></div></div></Card>
+}
 function PanelList({ title, icon: Icon, items, tone }) { return <Card><CardHeader icon={Icon} title={title} /><div className="space-y-3 p-5">{items.map((item) => <div key={item} className={`rounded-2xl p-4 text-sm font-bold ring-1 ${tone === 'green' ? 'bg-emerald-50 text-emerald-800 ring-emerald-100' : 'bg-amber-50 text-amber-800 ring-amber-100'}`}>{item}</div>)}</div></Card> }
 
 function ComparePage({ selectedIds, setPage, candidateRows }) {

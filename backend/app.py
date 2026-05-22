@@ -47,6 +47,8 @@ CANDIDATE_FIELDS = (
     "expat_fit",
     "leader_fit",
     "purpose",
+    "photo_url",
+    "work_history",
 )
 
 CHANGE_TRACKED_FIELDS = tuple(field for field in CANDIDATE_FIELDS if field != "employee_id")
@@ -573,6 +575,8 @@ def init_db(db_path: str) -> None:
                 expat_fit REAL,
                 leader_fit REAL,
                 purpose TEXT,
+                photo_url TEXT,
+                work_history TEXT,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -668,6 +672,8 @@ def ensure_candidate_columns(conn: sqlite3.Connection) -> None:
         "language_type": "TEXT",
         "overseas_country": "TEXT",
         "overseas_type": "TEXT",
+        "photo_url": "TEXT",
+        "work_history": "TEXT",
     }
     for column, column_type in column_sql.items():
         if column not in existing:
