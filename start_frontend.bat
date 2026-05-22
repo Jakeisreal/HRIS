@@ -13,8 +13,8 @@ if not exist "node_modules" (
   if errorlevel 1 goto :error
 )
 
-echo [frontend] Starting Vite frontend...
-npm run dev
+echo [frontend] Starting Vite frontend at http://localhost:5173 ...
+npm run dev -- --host localhost --port 5173 --strictPort
 goto :eof
 
 :error

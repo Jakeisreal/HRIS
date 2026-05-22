@@ -74,7 +74,12 @@ function isApiEnabled() {
 async function apiFetch(path, options = {}, token) {
   const headers = { ...(options.headers || {}) }
   if (token) headers.Authorization = `Bearer ${token}`
-  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers })
+  let response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers })
+  } catch {
+    throw new Error(`백엔드 API에 연결할 수 없습니다. start_all.bat을 다시 실행한 뒤 http://localhost:5173 에서 접속해 주세요. API: ${API_BASE_URL || '미설정'}`)
+  }
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
     throw new Error(payload.error || `API 요청 실패: ${response.status}`)

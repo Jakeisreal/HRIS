@@ -13,7 +13,7 @@ start_all.bat
 이 파일은 두 개의 창을 엽니다.
 
 - `HRIS Backend`: Flask API 서버 (`http://127.0.0.1:5000`)
-- `HRIS Frontend`: Vite 프론트엔드 서버 (`http://localhost:5173` 또는 창에 표시되는 주소)
+- `HRIS Frontend`: Vite 프론트엔드 서버 (`http://localhost:5173`)
 
 첫 실행 시 자동으로 처리되는 항목입니다.
 
@@ -52,7 +52,28 @@ python create_template.py
 
 열려 있는 `HRIS Backend`, `HRIS Frontend` 창에서 각각 `Ctrl+C`를 누른 뒤 창을 닫습니다.
 
-## 5. 수동 실행
+## 5. 로그인에서 `Failed to fetch`가 보일 때
+
+브라우저 주소가 아래 주소인지 먼저 확인합니다.
+
+```text
+http://localhost:5173
+```
+
+아래 주소는 로컬 테스트용으로 사용하지 않습니다.
+
+```text
+https://jakeisreal.github.io/HRIS/
+http://192.168.x.x:5173
+```
+
+그 다음 `HRIS Backend` 창에 오류가 없는지 확인합니다. 백엔드가 정상이라면 아래 주소가 브라우저에서 열립니다.
+
+```text
+http://127.0.0.1:5000/api/health
+```
+
+## 6. 수동 실행
 
 필요하면 백엔드와 프론트엔드를 따로 실행할 수 있습니다.
 
