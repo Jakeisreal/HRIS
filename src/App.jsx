@@ -60,6 +60,11 @@ const audits = [
   { time: '2026-05-22 10:14', user: '김지석', role: '인사담당자', action: '템플릿 적용', target: '중국 법인 주재원 후보', result: '성공', risk: '정상', ip: '10.21.4.15' },
 ]
 
+const demoUsers = {
+  E24017: { password: 'password', role: 'hr', name: '김도현' },
+  E90001: { password: 'password', role: 'viewer', name: '박민수' },
+}
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 
 function isApiEnabled() {
@@ -138,6 +143,17 @@ function parsePurpose(value) {
     // Plain Excel values are handled below.
   }
   return String(value).split(/[,\n/]+/).map((item) => item.trim()).filter(Boolean)
+}
+
+function validateDemoLogin(employeeId, password, selectedRole) {
+  const user = demoUsers[employeeId]
+  if (!user || user.password !== password) {
+    throw new Error('아이디 또는 비밀번호가 올바르지 않습니다.')
+  }
+  if (user.role !== selectedRole) {
+    throw new Error(`선택한 접속 유형이 계정 권한과 다릅니다. 이 계정은 ${user.role === 'hr' ? '인사담당자' : '팀장/조회자'} 권한입니다.`)
+  }
+  return user
 }
 
 const nav = [
@@ -252,7 +268,7 @@ function HeroMetric({ icon: Icon, label, value }) {
   return <div className="rounded-3xl bg-white/10 p-5 ring-1 ring-white/10"><Icon className="h-6 w-6 text-white/70" /><p className="mt-4 text-xs font-bold text-white/50">{label}</p><p className="mt-1 text-xl font-black text-white">{value}</p></div>
 }
 
-function AppShell({ role, setRole, page, setPage, onLogout, apiAuth, children }) {
+function AppShell({ role, page, setPage, onLogout, children }) {
   const current = nav.find((item) => item.key === page)
   const isAllowed = current?.roles.includes(role)
   return (
@@ -271,7 +287,7 @@ function AppShell({ role, setRole, page, setPage, onLogout, apiAuth, children })
         </aside>
         <main className="min-w-0 flex-1">
           <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-            <div className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between"><div><div className="text-xs font-semibold text-slate-500">{current?.label || '접근 차단'}</div><div className="mt-1 flex flex-wrap items-center gap-2"><h1 className="text-2xl font-black tracking-tight">{current?.label || '접근 권한 없음'}</h1><Badge tone={role === 'hr' ? 'blue' : 'amber'}>{role === 'hr' ? '인사담당자' : '팀장/조회자'}</Badge><Badge tone="dark">기준일 2026.05.22</Badge></div></div><div className="flex flex-wrap items-center gap-2"><select value={role} disabled={apiAuth} onChange={(e) => setRole(e.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-black text-slate-700 shadow-sm outline-none focus:border-slate-900 disabled:bg-slate-100 disabled:text-slate-400"><option value="hr">인사담당자</option><option value="viewer">팀장/조회자</option></select><button onClick={onLogout} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><LogOut className="h-4 w-4" /> 로그아웃</button></div></div>
+            <div className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between"><div><div className="text-xs font-semibold text-slate-500">{current?.label || '접근 차단'}</div><div className="mt-1 flex flex-wrap items-center gap-2"><h1 className="text-2xl font-black tracking-tight">{current?.label || '접근 권한 없음'}</h1><Badge tone={role === 'hr' ? 'blue' : 'amber'}>{role === 'hr' ? '인사담당자' : '팀장/조회자'}</Badge><Badge tone="dark">기준일 2026.05.22</Badge></div></div><div className="flex flex-wrap items-center gap-2"><select value={role} disabled className="h-10 rounded-xl border border-slate-200 bg-slate-100 px-3 text-sm font-black text-slate-400 shadow-sm outline-none"><option value="hr">인사담당자</option><option value="viewer">팀장/조회자</option></select><button onClick={onLogout} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><LogOut className="h-4 w-4" /> 로그아웃</button></div></div>
           </header>
           {!isAllowed && page !== 'forbidden' ? <ForbiddenPage setPage={setPage} role={role} /> : children}
         </main>
@@ -436,6 +452,9 @@ export default function App() {
   const handleLogin = async ({ employeeId, password, role: selectedRole }) => {
     if (isApiEnabled()) {
       const payload = await loginApi(employeeId, password)
+      if (payload.user.role !== selectedRole) {
+        throw new Error(`선택한 접속 유형이 계정 권한과 다릅니다. 이 계정은 ${payload.user.role === 'hr' ? '인사담당자' : '팀장/조회자'} 권한입니다.`)
+      }
       setAuthToken(payload.token)
       setRole(payload.user.role)
       if (payload.user.role === 'hr') {
@@ -444,7 +463,8 @@ export default function App() {
         setAuditStatus(`API 연동: 감사 로그 ${rows.length}건`)
       }
     } else {
-      setRole(selectedRole)
+      const user = validateDemoLogin(employeeId, password, selectedRole)
+      setRole(user.role)
     }
     setAuthed(true)
     setPage('dashboard')
@@ -467,5 +487,5 @@ export default function App() {
   else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} />
   else if (page === 'audit') content = <AuditPage rows={auditRows} status={auditStatus} />
   else content = <ForbiddenPage setPage={setPage} role={role} />
-  return <AppShell role={role} setRole={setRole} page={page} setPage={setPage} onLogout={handleLogout} apiAuth={isApiEnabled()}>{content}</AppShell>
+  return <AppShell role={role} page={page} setPage={setPage} onLogout={handleLogout}>{content}</AppShell>
 }
