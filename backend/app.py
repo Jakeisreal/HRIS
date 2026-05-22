@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sqlite3
 from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, request
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from backend.parsing import parse_candidate_workbook
 
@@ -62,6 +64,61 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
     def health():
         return jsonify({"ok": True})
 
+    @app.post("/api/auth/login")
+    def login():
+        payload = request.get_json(silent=True) or {}
+        employee_id = str(payload.get("employee_id") or "").strip()
+        password = str(payload.get("password") or "")
+        if not employee_id or not password:
+            return jsonify({"error": "사번과 비밀번호가 필요합니다."}), 400
+
+        with connect(app.config["DB_PATH"]) as conn:
+            user = conn.execute(
+                """
+                SELECT employee_id, name, role, password_hash, active
+                FROM users
+                WHERE employee_id = ?
+                """,
+                (employee_id,),
+            ).fetchone()
+            if user is None or not user["active"] or not check_password_hash(user["password_hash"], password):
+                return jsonify({"error": "아이디 또는 비밀번호가 올바르지 않습니다."}), 401
+
+            token = secrets.token_urlsafe(32)
+            conn.execute(
+                "INSERT INTO auth_sessions (token, employee_id) VALUES (?, ?)",
+                (token, employee_id),
+            )
+            conn.commit()
+
+        return jsonify(
+            {
+                "token": token,
+                "user": {
+                    "employee_id": user["employee_id"],
+                    "name": user["name"],
+                    "role": user["role"],
+                },
+            }
+        )
+
+    @app.get("/api/auth/me")
+    def me():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+        if user is None:
+            return jsonify({"error": "인증이 필요합니다."}), 401
+        return jsonify({"user": user})
+
+    @app.post("/api/auth/logout")
+    def logout():
+        token = get_bearer_token()
+        if token:
+            with connect(app.config["DB_PATH"]) as conn:
+                conn.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+                conn.commit()
+        return jsonify({"ok": True})
+
     @app.get("/api/candidates")
     def list_candidates():
         with connect(app.config["DB_PATH"]) as conn:
@@ -76,6 +133,13 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
 
     @app.post("/api/candidates/upload")
     def upload_candidates():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+        if user is None:
+            return jsonify({"error": "인증이 필요합니다."}), 401
+        if user["role"] != "hr":
+            return jsonify({"error": "인사담당자 권한이 필요합니다."}), 403
+
         uploaded = request.files.get("file")
         if uploaded is None:
             return jsonify({"error": "multipart form-data의 file 필드가 필요합니다."}), 400
@@ -183,9 +247,26 @@ def init_db(db_path: str) -> None:
                 new_value TEXT,
                 FOREIGN KEY(upload_run_id) REFERENCES upload_runs(id)
             );
+
+            CREATE TABLE IF NOT EXISTS users (
+                employee_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('hr', 'viewer')),
+                password_hash TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token TEXT PRIMARY KEY,
+                employee_id TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(employee_id) REFERENCES users(employee_id)
+            );
             """
         )
         ensure_candidate_columns(conn)
+        seed_demo_users(conn)
 
 
 def ensure_candidate_columns(conn: sqlite3.Connection) -> None:
@@ -206,6 +287,47 @@ def ensure_candidate_columns(conn: sqlite3.Connection) -> None:
     for column, column_type in column_sql.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE candidates ADD COLUMN {column} {column_type}")
+
+
+def seed_demo_users(conn: sqlite3.Connection) -> None:
+    users = [
+        ("E24017", "김도현", "hr", "password"),
+        ("E90001", "박민수", "viewer", "password"),
+    ]
+    for employee_id, name, role, password in users:
+        exists = conn.execute("SELECT 1 FROM users WHERE employee_id = ?", (employee_id,)).fetchone()
+        if exists is None:
+            conn.execute(
+                """
+                INSERT INTO users (employee_id, name, role, password_hash)
+                VALUES (?, ?, ?, ?)
+                """,
+                (employee_id, name, role, generate_password_hash(password)),
+            )
+
+
+def get_bearer_token() -> str | None:
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    token = header.removeprefix("Bearer ").strip()
+    return token or None
+
+
+def authenticate_request(conn: sqlite3.Connection) -> dict[str, Any] | None:
+    token = get_bearer_token()
+    if token is None:
+        return None
+    row = conn.execute(
+        """
+        SELECT users.employee_id, users.name, users.role
+        FROM auth_sessions
+        JOIN users ON users.employee_id = auth_sessions.employee_id
+        WHERE auth_sessions.token = ? AND users.active = 1
+        """,
+        (token,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def create_upload_run(conn: sqlite3.Connection, filename: str, summary: dict[str, Any]) -> int:

@@ -66,8 +66,10 @@ function isApiEnabled() {
   return API_BASE_URL.length > 0
 }
 
-async function apiFetch(path, options) {
-  const response = await fetch(`${API_BASE_URL}${path}`, options)
+async function apiFetch(path, options = {}, token) {
+  const headers = { ...(options.headers || {}) }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const response = await fetch(`${API_BASE_URL}${path}`, { ...options, headers })
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
     throw new Error(payload.error || `API 요청 실패: ${response.status}`)
@@ -75,19 +77,27 @@ async function apiFetch(path, options) {
   return payload
 }
 
+async function loginApi(employeeId, password) {
+  return apiFetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employee_id: employeeId, password }),
+  })
+}
+
 async function fetchCandidateRows() {
   const payload = await apiFetch('/api/candidates')
   return (payload.items || []).map(mapApiCandidate)
 }
 
-async function uploadCandidateFile(file, { dryRun }) {
+async function uploadCandidateFile(file, { dryRun, token }) {
   const formData = new FormData()
   formData.append('file', file)
   if (dryRun) formData.append('dry_run', 'true')
   return apiFetch('/api/candidates/upload', {
     method: 'POST',
     body: formData,
-  })
+  }, token)
 }
 
 function mapApiCandidate(row) {
@@ -190,7 +200,22 @@ function Metric({ label, value, sub, icon: Icon, tone = 'default' }) {
   )
 }
 
-function LoginPage({ setAuthed, setPage, role, setRole }) {
+function LoginPage({ onLogin, role, setRole }) {
+  const [employeeId, setEmployeeId] = useState('E24017')
+  const [password, setPassword] = useState('password')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await onLogin({ employeeId, password, role })
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <div className="grid min-h-screen grid-cols-1 bg-slate-100 xl:grid-cols-[1.1fr_0.9fr]">
       <section className="hidden bg-slate-950 p-12 text-white xl:flex xl:flex-col xl:justify-between">
@@ -202,10 +227,11 @@ function LoginPage({ setAuthed, setPage, role, setRole }) {
         <Card className="w-full max-w-md overflow-hidden">
           <div className="border-b border-slate-100 p-6"><div className="mb-5 flex h-14 w-14 items-center justify-center rounded-3xl bg-slate-900 text-white"><ShieldCheck className="h-7 w-7" /></div><h2 className="text-2xl font-black tracking-tight">로그인</h2><p className="mt-2 text-sm font-semibold leading-6 text-slate-500">인증 후 역할에 따라 메뉴 접근 범위를 제어합니다.</p></div>
           <div className="space-y-4 p-6">
-            <Input label="아이디 / 사번" icon={User} defaultValue="E24017" />
-            <Input label="비밀번호" icon={KeyRound} defaultValue="password" type="password" />
+            <Input label="아이디 / 사번" icon={User} value={employeeId} onChange={setEmployeeId} />
+            <Input label="비밀번호" icon={KeyRound} value={password} onChange={setPassword} type="password" />
             <div><label className="mb-1.5 block text-xs font-black text-slate-600">시연 권한</label><div className="grid grid-cols-2 gap-2"><button onClick={() => setRole('hr')} className={`rounded-2xl border px-3 py-3 text-sm font-black ${role === 'hr' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-700'}`}>인사담당자</button><button onClick={() => setRole('viewer')} className={`rounded-2xl border px-3 py-3 text-sm font-black ${role === 'viewer' ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-700'}`}>팀장/조회자</button></div></div>
-            <button onClick={() => { setAuthed(true); setPage('dashboard') }} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 text-sm font-black text-white shadow-sm hover:bg-slate-800"><LogIn className="h-4 w-4" /> 로그인</button>
+            {error && <div className="rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-800 ring-1 ring-rose-100">{error}</div>}
+            <button disabled={busy} onClick={submit} className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-4 text-sm font-black text-white shadow-sm hover:bg-slate-800 disabled:bg-slate-300"><LogIn className="h-4 w-4" /> 로그인</button>
           </div>
         </Card>
       </section>
@@ -213,15 +239,15 @@ function LoginPage({ setAuthed, setPage, role, setRole }) {
   )
 }
 
-function Input({ label, icon: Icon, defaultValue, type = 'text' }) {
-  return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><div className="relative"><Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input type={type} defaultValue={defaultValue} className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm font-bold outline-none focus:border-slate-900 focus:bg-white" /></div></div>
+function Input({ label, icon: Icon, value, onChange, defaultValue, type = 'text' }) {
+  return <div><label className="mb-1.5 block text-xs font-black text-slate-600">{label}</label><div className="relative"><Icon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" /><input type={type} value={value} defaultValue={defaultValue} onChange={(e) => onChange?.(e.target.value)} className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 pl-10 pr-4 text-sm font-bold outline-none focus:border-slate-900 focus:bg-white" /></div></div>
 }
 
 function HeroMetric({ icon: Icon, label, value }) {
   return <div className="rounded-3xl bg-white/10 p-5 ring-1 ring-white/10"><Icon className="h-6 w-6 text-white/70" /><p className="mt-4 text-xs font-bold text-white/50">{label}</p><p className="mt-1 text-xl font-black text-white">{value}</p></div>
 }
 
-function AppShell({ role, setRole, page, setPage, children }) {
+function AppShell({ role, setRole, page, setPage, onLogout, apiAuth, children }) {
   const current = nav.find((item) => item.key === page)
   const isAllowed = current?.roles.includes(role)
   return (
@@ -240,7 +266,7 @@ function AppShell({ role, setRole, page, setPage, children }) {
         </aside>
         <main className="min-w-0 flex-1">
           <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
-            <div className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between"><div><div className="text-xs font-semibold text-slate-500">{current?.label || '접근 차단'}</div><div className="mt-1 flex flex-wrap items-center gap-2"><h1 className="text-2xl font-black tracking-tight">{current?.label || '접근 권한 없음'}</h1><Badge tone={role === 'hr' ? 'blue' : 'amber'}>{role === 'hr' ? '인사담당자' : '팀장/조회자'}</Badge><Badge tone="dark">기준일 2026.05.22</Badge></div></div><div className="flex flex-wrap items-center gap-2"><select value={role} onChange={(e) => setRole(e.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-black text-slate-700 shadow-sm outline-none focus:border-slate-900"><option value="hr">인사담당자</option><option value="viewer">팀장/조회자</option></select><button onClick={() => setPage('login')} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><LogOut className="h-4 w-4" /> 로그아웃</button></div></div>
+            <div className="flex flex-col gap-4 px-6 py-4 xl:flex-row xl:items-center xl:justify-between"><div><div className="text-xs font-semibold text-slate-500">{current?.label || '접근 차단'}</div><div className="mt-1 flex flex-wrap items-center gap-2"><h1 className="text-2xl font-black tracking-tight">{current?.label || '접근 권한 없음'}</h1><Badge tone={role === 'hr' ? 'blue' : 'amber'}>{role === 'hr' ? '인사담당자' : '팀장/조회자'}</Badge><Badge tone="dark">기준일 2026.05.22</Badge></div></div><div className="flex flex-wrap items-center gap-2"><select value={role} disabled={apiAuth} onChange={(e) => setRole(e.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-black text-slate-700 shadow-sm outline-none focus:border-slate-900 disabled:bg-slate-100 disabled:text-slate-400"><option value="hr">인사담당자</option><option value="viewer">팀장/조회자</option></select><button onClick={onLogout} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><LogOut className="h-4 w-4" /> 로그아웃</button></div></div>
           </header>
           {!isAllowed && page !== 'forbidden' ? <ForbiddenPage setPage={setPage} role={role} /> : children}
         </main>
@@ -310,7 +336,7 @@ function labelOf(key) { return { dept: '부서', position: '직위', performance
 
 function TemplatesPage({ setPage }) { return <div className="space-y-5 p-5"><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="전체 템플릿" value={templates.length} icon={Filter} /><Metric label="기본 제공" value="2" icon={Star} /><Metric label="공유 중" value="1" icon={Share2} /><Metric label="개인" value="1" icon={Lock} /></div><div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{templates.map((t) => <TemplateCard key={t.id} t={t} setPage={setPage} />)}</div></div> }
 function TemplateCard({ t, setPage }) { return <Card><div className="p-5"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-black text-slate-900">{t.name}</h3><Badge tone={t.purpose === '주재원' ? 'blue' : 'amber'}>{t.purpose}</Badge><Badge>{t.scope}</Badge></div><p className="mt-2 text-sm font-semibold text-slate-500">소유자 {t.owner} · 예상 후보 {t.count}명</p></div><button className="rounded-xl p-2 hover:bg-slate-100"><Settings2 className="h-5 w-5" /></button></div><div className="mt-4 flex flex-wrap gap-1.5">{t.filters.map((f) => <span key={f} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{f}</span>)}</div><div className="mt-5 flex justify-end gap-2"><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"><Copy className="inline h-3.5 w-3.5" /> 복제</button><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"><Share2 className="inline h-3.5 w-3.5" /> 공유</button><button onClick={() => setPage('candidates')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div></Card> }
-function UploadPage({ onUploaded, lastUpload, setPage }) {
+function UploadPage({ onUploaded, lastUpload, setPage, authToken }) {
   const [file, setFile] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
@@ -330,7 +356,7 @@ function UploadPage({ onUploaded, lastUpload, setPage }) {
     setBusy(true)
     setError('')
     try {
-      const payload = await uploadCandidateFile(file, { dryRun })
+      const payload = await uploadCandidateFile(file, { dryRun, token: authToken })
       setResult(payload)
       if (!dryRun) await onUploaded?.(payload)
     } catch (err) {
@@ -352,6 +378,7 @@ export default function App() {
   const [candidateRows, setCandidateRows] = useState(candidates)
   const [apiStatus, setApiStatus] = useState(isApiEnabled() ? 'API 후보자 데이터를 조회합니다.' : 'API 주소 미설정: mock data를 표시합니다.')
   const [lastUpload, setLastUpload] = useState(null)
+  const [authToken, setAuthToken] = useState('')
   const [selectedCandidate, setSelectedCandidate] = useState(candidates[0])
   const [selectedIds, setSelectedIds] = useState(['E24017', 'E21884', 'E22615'])
 
@@ -381,15 +408,33 @@ export default function App() {
     await reloadCandidates()
   }
 
-  if (!authed || page === 'login') return <LoginPage setAuthed={setAuthed} setPage={setPage} role={role} setRole={setRole} />
+  const handleLogin = async ({ employeeId, password, role: selectedRole }) => {
+    if (isApiEnabled()) {
+      const payload = await loginApi(employeeId, password)
+      setAuthToken(payload.token)
+      setRole(payload.user.role)
+    } else {
+      setRole(selectedRole)
+    }
+    setAuthed(true)
+    setPage('dashboard')
+  }
+
+  const handleLogout = () => {
+    setAuthToken('')
+    setAuthed(false)
+    setPage('login')
+  }
+
+  if (!authed || page === 'login') return <LoginPage onLogin={handleLogin} role={role} setRole={setRole} />
   let content
   if (page === 'dashboard') content = <DashboardPage setPage={setPage} role={role} candidateRows={candidateRows} setSelectedCandidate={setSelectedCandidate} />
   else if (page === 'candidates') content = <CandidatesPage setPage={setPage} setSelectedCandidate={setSelectedCandidate} selectedIds={selectedIds} setSelectedIds={setSelectedIds} candidateRows={candidateRows} apiStatus={apiStatus} />
   else if (page === 'detail') content = <DetailPage candidate={selectedCandidate} setPage={setPage} setSelectedIds={setSelectedIds} />
   else if (page === 'compare') content = <ComparePage selectedIds={selectedIds} setPage={setPage} candidateRows={candidateRows} />
   else if (page === 'templates') content = <TemplatesPage setPage={setPage} />
-  else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} />
+  else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} />
   else if (page === 'audit') content = <AuditPage />
   else content = <ForbiddenPage setPage={setPage} role={role} />
-  return <AppShell role={role} setRole={setRole} page={page} setPage={setPage}>{content}</AppShell>
+  return <AppShell role={role} setRole={setRole} page={page} setPage={setPage} onLogout={handleLogout} apiAuth={isApiEnabled()}>{content}</AppShell>
 }

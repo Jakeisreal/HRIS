@@ -15,6 +15,7 @@ class CandidateUploadChangeTest(unittest.TestCase):
         os.unlink(self.db_path)
         self.app = create_app(self.db_path)
         self.client = self.app.test_client()
+        self.token = login(self.client, "E24017", "password")
 
     def tearDown(self):
         if os.path.exists(self.db_path):
@@ -32,6 +33,7 @@ class CandidateUploadChangeTest(unittest.TestCase):
             "/api/candidates/upload",
             data={"file": (first, "first.xlsx")},
             content_type="multipart/form-data",
+            headers={"Authorization": f"Bearer {self.token}"},
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json["newRows"], 2)
@@ -50,6 +52,7 @@ class CandidateUploadChangeTest(unittest.TestCase):
             "/api/candidates/upload",
             data={"file": (second, "second.xlsx")},
             content_type="multipart/form-data",
+            headers={"Authorization": f"Bearer {self.token}"},
         )
 
         self.assertEqual(response.status_code, 201)
@@ -77,6 +80,15 @@ def workbook_bytes(headers, rows):
     workbook.save(buffer)
     buffer.seek(0)
     return buffer
+
+
+def login(client, employee_id, password):
+    response = client.post(
+        "/api/auth/login",
+        json={"employee_id": employee_id, "password": password},
+    )
+    assert response.status_code == 200
+    return response.json["token"]
 
 
 if __name__ == "__main__":
