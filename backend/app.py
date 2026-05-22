@@ -60,6 +60,7 @@ DEMO_PASSWORDS = {
     "hr": os.environ.get("HRIS_DEMO_PASSWORD_HR", DEMO_PASSWORD_DEFAULT),
     "viewer": os.environ.get("HRIS_DEMO_PASSWORD_VIEWER", DEMO_PASSWORD_DEFAULT),
 }
+DEFAULT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 
 
 def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
@@ -70,15 +71,18 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
 
     @app.after_request
     def add_cors_headers(response):
-        allowed_origin = os.environ.get("HRIS_CORS_ORIGIN")
-        if not allowed_origin:
-            if app.testing:
-                allowed_origin = "http://localhost"
-            else:
-                raise RuntimeError("HRIS_CORS_ORIGIN environment 변수가 설정되어 있어야 합니다.")
+        allowed_origins = get_allowed_cors_origins(app)
+        request_origin = request.headers.get("Origin")
+        if "*" in allowed_origins:
+            allowed_origin = "*"
+        elif request_origin in allowed_origins:
+            allowed_origin = request_origin
+        else:
+            allowed_origin = allowed_origins[0]
         response.headers["Access-Control-Allow-Origin"] = allowed_origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Vary"] = "Origin"
         return response
 
     @app.get("/api/health")
@@ -1048,6 +1052,16 @@ def _serialize_for_compare(value: Any) -> str:
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(_serialize_value(value)).strip()
+
+
+def get_allowed_cors_origins(app: Flask) -> list[str]:
+    configured = os.environ.get("HRIS_CORS_ORIGIN", "")
+    origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+    if origins:
+        return origins
+    if app.testing:
+        return ["http://localhost"]
+    return list(DEFAULT_CORS_ORIGINS)
 
 
 if __name__ == "__main__":
