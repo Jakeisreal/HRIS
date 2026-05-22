@@ -133,6 +133,11 @@ async function fetchTemplates(token) {
   return payload.items || []
 }
 
+async function fetchUploadRuns(token) {
+  const payload = await apiFetch('/api/upload-runs', {}, token)
+  return payload.items || []
+}
+
 async function createTemplate(payload, token) {
   return apiFetch('/api/templates', {
     method: 'POST',
@@ -279,6 +284,24 @@ function uniqueOptions(rows, key) {
   return ['전체', ...Array.from(new Set(rows.map((row) => row[key]).filter((value) => value && value !== '-'))).sort()]
 }
 
+function formatUploadTime(value) {
+  if (!value) return '-'
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+function countTemplateMatches(template, rows) {
+  const state = { ...DEFAULT_CANDIDATE_FILTER, ...(template.filter_state || {}) }
+  return rows.filter((candidate) => {
+    const purposeOk = state.purpose === '전체' || candidate.purpose?.includes(state.purpose)
+    const langOk = Number(candidate.languageScore || 0) >= state.minLanguage
+    const overseasOk = !state.overseasOnly || Number(candidate.overseasMonths || 0) > 0
+    const tenureOk = Number(candidate.tenure || 0) >= state.minTenure
+    const expatOk = Number(candidate.expatFit || 0) >= state.minExpatFit
+    const leaderOk = Number(candidate.leaderFit || 0) >= state.minLeaderFit
+    return purposeOk && langOk && overseasOk && tenureOk && expatOk && leaderOk
+  }).length
+}
+
 const nav = [
   { key: 'dashboard', label: '홈 대시보드', icon: LayoutDashboard, roles: ['hr', 'viewer'] },
   { key: 'candidates', label: '후보자 목록', icon: Users, roles: ['hr', 'viewer'] },
@@ -419,28 +442,45 @@ function AppShell({ role, page, setPage, onLogout, children }) {
   )
 }
 
-function DashboardPage({ setPage, role, candidateRows, setSelectedCandidate, templateRows, onApplyTemplate }) {
+function DashboardPage({ setPage, role, candidateRows, setSelectedCandidate, templateRows, onApplyTemplate, uploadRows }) {
   const canManage = role === 'hr'
+  const total = candidateRows.length
+  const expatCount = candidateRows.filter((candidate) => candidate.purpose?.includes('주재원')).length
+  const leaderCount = candidateRows.filter((candidate) => candidate.purpose?.includes('차기 팀장') || candidate.purpose?.includes('차기팀장')).length
+  const latestUpload = uploadRows[0]
+  const latestErrors = latestUpload?.errors ?? 0
+  const latestValid = latestUpload?.success ?? total
+  const latestTime = latestUpload ? formatUploadTime(latestUpload.at) : '이력 없음'
   return (
     <div className="space-y-5 p-5">
-      <Card className="overflow-hidden"><div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]"><div className="p-6"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">데이터 정상 연동</Badge><Badge tone="amber">오류 5건 확인 필요</Badge></div><h2 className="mt-5 text-4xl font-black leading-tight tracking-tight text-slate-900">데이터 기반 후보자 선별을 한 화면에서 시작합니다.</h2><p className="mt-4 max-w-3xl text-base font-semibold leading-7 text-slate-500">목적별 템플릿을 적용해 후보군을 압축하고, 상세 대시보드와 비교 화면에서 평가·어학·리더십·해외 경험을 검토합니다.</p><div className="mt-6 flex flex-wrap gap-2"><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-sm"><Globe2 className="h-4 w-4" /> 주재원 후보 선별</button><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><BriefcaseBusiness className="h-4 w-4" /> 차기 팀장 후보 선별</button></div></div><div className="border-t border-slate-100 bg-slate-50 p-6 xl:border-l xl:border-t-0"><div className="rounded-3xl bg-white p-5 ring-1 ring-slate-200"><p className="text-xs font-bold text-slate-500">최근 데이터 기준일</p><p className="mt-1 text-2xl font-black text-slate-900">2026.05.22</p><div className="mt-5 space-y-3"><StatusRow label="검증 성공" value="1,180건" /><StatusRow label="오류" value="5건" danger /><StatusRow label="최근 업로드" value="09:34" /></div></div></div></div></Card>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"><Metric label="전체 후보자" value="1,248" sub="최근 업로드 기준" icon={Users} /><Metric label="주재원 후보" value="86" sub="기본 템플릿 기준" icon={Globe2} tone="blue" /><Metric label="차기 팀장 후보" value="124" sub="기본 템플릿 기준" icon={BriefcaseBusiness} tone="amber" /><Metric label="데이터 오류" value="5" sub="검증 결과 확인 필요" icon={AlertTriangle} tone="red" /></div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_390px]"><Card><CardHeader icon={LayoutDashboard} title="빠른 실행" subtitle="주요 업무 화면으로 즉시 이동합니다." /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2"><QuickAction title="후보자 목록" desc="검색·필터·정렬로 후보군 압축" icon={Search} onClick={() => setPage('candidates')} primary /><QuickAction title="후보자 비교" desc="선택 후보 2~3명 비교" icon={BarChart3} onClick={() => setPage('compare')} primary />{canManage && <QuickAction title="엑셀 업로드" desc="원천 데이터 갱신" icon={UploadCloud} onClick={() => setPage('upload')} />}{canManage && <QuickAction title="감사 로그" desc="조회·다운로드 이력 추적" icon={ShieldCheck} onClick={() => setPage('audit')} />}</div></Card><NoticePanel /></div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><RecommendedPanel setPage={setPage} rows={candidateRows} setSelectedCandidate={setSelectedCandidate} /><RecentTemplatePanel setPage={setPage} canManage={canManage} templates={templateRows} onApply={onApplyTemplate} /></div>
-      <UploadStatusPanel setPage={setPage} canManage={canManage} />
+      <Card className="overflow-hidden"><div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px]"><div className="p-6"><div className="flex flex-wrap items-center gap-2"><Badge tone="green">API 데이터 연동</Badge>{latestErrors > 0 && <Badge tone="amber">오류 {latestErrors}건 확인 필요</Badge>}</div><h2 className="mt-5 text-4xl font-black leading-tight tracking-tight text-slate-900">데이터 기반 후보자 선별을 한 화면에서 시작합니다.</h2><p className="mt-4 max-w-3xl text-base font-semibold leading-7 text-slate-500">목적별 템플릿을 적용해 후보군을 압축하고, 상세 대시보드와 비교 화면에서 평가·어학·리더십·해외 경험을 검토합니다.</p><div className="mt-6 flex flex-wrap gap-2"><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white shadow-sm"><Globe2 className="h-4 w-4" /> 주재원 후보 선별</button><button onClick={() => setPage('candidates')} className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50"><BriefcaseBusiness className="h-4 w-4" /> 차기 팀장 후보 선별</button></div></div><div className="border-t border-slate-100 bg-slate-50 p-6 xl:border-l xl:border-t-0"><div className="rounded-3xl bg-white p-5 ring-1 ring-slate-200"><p className="text-xs font-bold text-slate-500">최근 데이터 기준</p><p className="mt-1 text-2xl font-black text-slate-900">{latestTime}</p><div className="mt-5 space-y-3"><StatusRow label="후보자 수" value={`${total}명`} /><StatusRow label="검증 성공" value={`${latestValid}건`} /><StatusRow label="오류" value={`${latestErrors}건`} danger={latestErrors > 0} /></div></div></div></div></Card>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4"><Metric label="전체 후보자" value={total} sub="현재 DB 기준" icon={Users} /><Metric label="주재원 후보" value={expatCount} sub="후보 목적 기준" icon={Globe2} tone="blue" /><Metric label="차기 팀장 후보" value={leaderCount} sub="후보 목적 기준" icon={BriefcaseBusiness} tone="amber" /><Metric label="데이터 오류" value={latestErrors} sub={latestUpload ? "최근 업로드 검증" : "업로드 이력 없음"} icon={AlertTriangle} tone={latestErrors > 0 ? 'red' : 'green'} /></div>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_390px]"><Card><CardHeader icon={LayoutDashboard} title="빠른 실행" subtitle="주요 업무 화면으로 즉시 이동합니다." /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2"><QuickAction title="후보자 목록" desc="검색·필터·정렬로 후보군 압축" icon={Search} onClick={() => setPage('candidates')} primary /><QuickAction title="후보자 비교" desc="선택 후보 2~3명 비교" icon={BarChart3} onClick={() => setPage('compare')} primary />{canManage && <QuickAction title="엑셀 업로드" desc="원천 데이터 갱신" icon={UploadCloud} onClick={() => setPage('upload')} />}{canManage && <QuickAction title="감사 로그" desc="조회·다운로드 이력 추적" icon={ShieldCheck} onClick={() => setPage('audit')} />}</div></Card><NoticePanel candidateRows={candidateRows} uploadRows={uploadRows} templateRows={templateRows} /></div>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2"><RecommendedPanel setPage={setPage} rows={candidateRows} setSelectedCandidate={setSelectedCandidate} /><RecentTemplatePanel setPage={setPage} canManage={canManage} templates={templateRows} onApply={onApplyTemplate} candidateRows={candidateRows} /></div>
+      <UploadStatusPanel setPage={setPage} canManage={canManage} rows={uploadRows} />
     </div>
   )
 }
 
 function StatusRow({ label, value, danger }) { return <div className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 p-3 ring-1 ring-slate-200"><p className="text-xs font-black text-slate-500">{label}</p><p className={`text-right text-xs font-black ${danger ? 'text-rose-700' : 'text-slate-800'}`}>{value}</p></div> }
 function QuickAction({ title, desc, icon: Icon, onClick, primary = false }) { return <button onClick={onClick} className={`group min-h-32 rounded-3xl border p-5 text-left transition ${primary ? 'border-slate-900 bg-slate-900 text-white shadow-lg' : 'border-slate-200 bg-white text-slate-900 hover:shadow-md'}`}><div className="flex items-start justify-between"><div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${primary ? 'bg-white/10' : 'bg-slate-100'}`}><Icon className="h-6 w-6" /></div><ArrowRight className={`h-5 w-5 transition group-hover:translate-x-1 ${primary ? 'text-white/70' : 'text-slate-400'}`} /></div><h3 className="mt-5 text-lg font-black tracking-tight">{title}</h3><p className={`mt-2 text-sm font-semibold leading-6 ${primary ? 'text-white/65' : 'text-slate-500'}`}>{desc}</p></button> }
-function NoticePanel() { return <Card><CardHeader icon={AlertTriangle} title="확인 필요 알림" subtitle="업무 전 확인 이벤트" right={<Badge tone="amber">3건</Badge>} /><div className="space-y-3 p-5"><Notice tone="amber" icon={FileSpreadsheet} title="최근 업로드 데이터 오류 5건" desc="고과등급, 입사일자, 사번, TOEIC 점수, 조직명 오류 확인 필요" /><Notice tone="red" icon={ShieldAlert} title="권한 차단 이벤트 1건" desc="팀장/조회자의 데이터 업로드 직접 URL 접근이 차단됨" /><Notice tone="blue" icon={Share2} title="공유 템플릿 활성화" desc="중국 법인 주재원 후보 템플릿이 인사팀에 공유 중" /></div></Card> }
+function NoticePanel({ candidateRows, uploadRows, templateRows }) {
+  const latest = uploadRows[0]
+  const sharedTemplates = templateRows.filter((template) => template.scope === '인사팀 공유').length
+  const notices = [
+    latest?.errors > 0
+      ? { tone: 'amber', icon: FileSpreadsheet, title: `최근 업로드 오류 ${latest.errors}건`, desc: `${latest.file} 검증 오류를 확인해야 합니다.` }
+      : { tone: 'blue', icon: FileSpreadsheet, title: latest ? '최근 업로드 정상 반영' : '업로드 이력 없음', desc: latest ? `${latest.file} 기준 후보자 ${candidateRows.length}명을 표시 중입니다.` : '데이터 관리에서 Excel을 반영하면 이력이 표시됩니다.' },
+    { tone: 'blue', icon: Share2, title: `공유 템플릿 ${sharedTemplates}건`, desc: sharedTemplates ? '인사팀 공유 템플릿을 후보자 목록에 적용할 수 있습니다.' : '공유 중인 템플릿은 아직 없습니다.' },
+  ]
+  return <Card><CardHeader icon={AlertTriangle} title="확인 필요 알림" subtitle="현재 데이터 기준 이벤트" right={<Badge tone={latest?.errors > 0 ? 'amber' : 'green'}>{notices.length}건</Badge>} /><div className="space-y-3 p-5">{notices.map((notice) => <Notice key={notice.title} {...notice} />)}</div></Card>
+}
 function Notice({ tone, icon: Icon, title, desc }) { const cls = tone === 'red' ? 'bg-rose-50 text-rose-800 ring-rose-100' : tone === 'blue' ? 'bg-blue-50 text-blue-800 ring-blue-100' : 'bg-amber-50 text-amber-800 ring-amber-100'; return <div className={`rounded-2xl p-4 ring-1 ${cls}`}><div className="flex items-start gap-3"><Icon className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="text-sm font-black">{title}</p><p className="mt-1 text-sm font-semibold leading-6 opacity-90">{desc}</p></div></div></div> }
 function RecommendedPanel({ setPage, rows = candidates, setSelectedCandidate }) { const sorted = [...rows].sort((a, b) => b.expatFit - a.expatFit).slice(0, 4); return <Card><CardHeader icon={Star} title="추천 후보 Top 4" subtitle="기본 템플릿 기준 상위 후보" /><div className="space-y-3 p-5">{sorted.map((c, idx) => <CandidateMini key={c.id} candidate={c} rank={idx + 1} onClick={() => { setSelectedCandidate?.(c); setPage('detail') }} />)}</div></Card> }
 function CandidateMini({ candidate, rank, onClick }) { return <button onClick={onClick} className="w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"><div className="flex items-start justify-between gap-3"><div className="flex items-start gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 text-sm font-black text-white">{rank}</div><div><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-black text-slate-900">{candidate.name}</p><Badge tone="blue">주재원 {candidate.expatFit}</Badge></div><p className="mt-1 text-xs font-semibold text-slate-500">{candidate.id} · {candidate.dept} · {candidate.position}</p><p className="mt-2 text-sm font-semibold text-slate-600">{candidate.strengths.join(' · ')}</p></div></div><ChevronRight className="h-4 w-4 text-slate-400" /></div></button> }
-function RecentTemplatePanel({ setPage, canManage, templates: rows = templates, onApply }) { return <Card><CardHeader icon={Filter} title="최근 사용 템플릿" subtitle="저장된 조건 즉시 적용" right={canManage ? <button onClick={() => setPage('templates')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">관리</button> : <Badge tone="amber">조회 권한</Badge>} /><div className="space-y-3 p-5">{rows.slice(0, 4).map((t) => <TemplateRow key={t.id} template={t} onApply={() => onApply?.(t)} />)}</div></Card> }
-function TemplateRow({ template, onApply }) { return <div className="rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-black text-slate-900">{template.name}</p><Badge tone={template.purpose === '주재원' ? 'blue' : 'amber'}>{template.purpose}</Badge></div><p className="mt-1 text-xs font-semibold text-slate-500">{template.scope} · 소유자 {template.owner}</p></div><div className="text-right"><p className="text-xl font-black text-slate-900">{template.count}</p><p className="text-xs font-bold text-slate-500">후보</p></div></div><div className="mt-3 flex justify-end"><button onClick={onApply} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div> }
-function UploadStatusPanel({ setPage, canManage }) { return <Card><CardHeader icon={Database} title="최근 업로드 및 데이터 상태" subtitle="후보자 마스터 기준일과 검증 결과" right={canManage && <button onClick={() => setPage?.('upload')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">새 업로드</button>} /><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr>{['파일명', '업로드', '행 수', '신규', '변경', '중복', '오류', '상태'].map((h) => <th key={h} className="px-5 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{uploads.map((row) => <tr key={row.file} className="hover:bg-slate-50"><td className="min-w-64 px-5 py-4 font-black text-slate-900">{row.file}</td><td className="whitespace-nowrap px-5 py-4"><p className="font-bold text-slate-700">{row.at}</p><p className="text-xs font-semibold text-slate-500">{row.user}</p></td><td className="px-5 py-4 font-bold">{row.rows}</td><td className="px-5 py-4 font-bold text-blue-700">{row.newRows}</td><td className="px-5 py-4 font-bold text-amber-700">{row.changes}</td><td className="px-5 py-4 font-bold text-slate-600">{row.dup}</td><td className="px-5 py-4 font-bold text-rose-700">{row.errors}</td><td className="px-5 py-4"><Badge tone={row.errors > 0 ? 'red' : 'green'}>{row.status}</Badge></td></tr>)}</tbody></table></div></Card> }
+function RecentTemplatePanel({ setPage, canManage, templates: rows = templates, onApply, candidateRows = candidates }) { return <Card><CardHeader icon={Filter} title="최근 사용 템플릿" subtitle="저장된 조건 즉시 적용" right={canManage ? <button onClick={() => setPage('templates')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">관리</button> : <Badge tone="amber">조회 권한</Badge>} /><div className="space-y-3 p-5">{rows.slice(0, 4).map((t) => <TemplateRow key={t.id} template={t} count={countTemplateMatches(t, candidateRows)} onApply={() => onApply?.(t)} />)}</div></Card> }
+function TemplateRow({ template, onApply, count = template.count }) { return <div className="rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-black text-slate-900">{template.name}</p><Badge tone={template.purpose === '주재원' ? 'blue' : 'amber'}>{template.purpose}</Badge></div><p className="mt-1 text-xs font-semibold text-slate-500">{template.scope} · 소유자 {template.owner}</p></div><div className="text-right"><p className="text-xl font-black text-slate-900">{count}</p><p className="text-xs font-bold text-slate-500">후보</p></div></div><div className="mt-3 flex justify-end"><button onClick={onApply} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div> }
+function UploadStatusPanel({ setPage, canManage, rows = uploads }) { return <Card><CardHeader icon={Database} title="최근 업로드 및 데이터 상태" subtitle={rows.length ? "후보자 마스터 기준일과 검증 결과" : "아직 반영된 업로드 이력이 없습니다."} right={canManage && <button onClick={() => setPage?.('upload')} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">새 업로드</button>} />{rows.length === 0 ? <div className="p-5 text-sm font-bold text-slate-500">데이터 관리에서 Excel을 최종 반영하면 이곳에 업로드 이력이 표시됩니다.</div> : <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr>{['파일명', '업로드', '행 수', '신규', '변경', '중복', '오류', '상태'].map((h) => <th key={h} className="px-5 py-3 text-left text-xs font-black uppercase tracking-wide text-slate-500">{h}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{rows.map((row) => <tr key={`${row.id || row.file}-${row.at}`} className="hover:bg-slate-50"><td className="min-w-64 px-5 py-4 font-black text-slate-900">{row.file}</td><td className="whitespace-nowrap px-5 py-4"><p className="font-bold text-slate-700">{formatUploadTime(row.at)}</p><p className="text-xs font-semibold text-slate-500">{row.user}</p></td><td className="px-5 py-4 font-bold">{row.rows}</td><td className="px-5 py-4 font-bold text-blue-700">{row.newRows}</td><td className="px-5 py-4 font-bold text-amber-700">{row.changes}</td><td className="px-5 py-4 font-bold text-slate-600">{row.dup}</td><td className="px-5 py-4 font-bold text-rose-700">{row.errors}</td><td className="px-5 py-4"><Badge tone={row.errors > 0 ? 'red' : 'green'}>{row.status}</Badge></td></tr>)}</tbody></table></div>}</Card> }
 
 function CandidatesPage({ setPage, setSelectedCandidate, selectedIds, setSelectedIds, candidateRows, apiStatus, filterState, setFilterState, onSaveTemplate, templateStatus }) {
   const [query, setQuery] = useState('')
@@ -546,7 +586,7 @@ function TemplatesPage({ setPage, rows = templates, onApply, onShare, status }) 
   return <div className="space-y-5 p-5"><div className="grid grid-cols-1 gap-4 md:grid-cols-4"><Metric label="전체 템플릿" value={rows.length} icon={Filter} /><Metric label="기본 제공" value={defaults} icon={Star} /><Metric label="공유 중" value={shared} icon={Share2} /><Metric label="개인" value={personal} icon={Lock} /></div>{status && <div className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-600 ring-1 ring-slate-200">{status}</div>}<div className="grid grid-cols-1 gap-4 xl:grid-cols-2">{rows.map((t) => <TemplateCard key={t.id} t={t} setPage={setPage} onApply={onApply} onShare={onShare} />)}</div></div>
 }
 function TemplateCard({ t, setPage, onApply, onShare }) { return <Card><div className="p-5"><div className="flex items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-lg font-black text-slate-900">{t.name}</h3><Badge tone={t.purpose === '주재원' ? 'blue' : 'amber'}>{t.purpose}</Badge><Badge>{t.scope}</Badge></div><p className="mt-2 text-sm font-semibold text-slate-500">소유자 {t.owner} · 예상 후보 {t.count}명</p></div><button className="rounded-xl p-2 hover:bg-slate-100"><Settings2 className="h-5 w-5" /></button></div><div className="mt-4 flex flex-wrap gap-1.5">{(t.filters || []).map((f) => <span key={f} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{f}</span>)}</div><div className="mt-5 flex justify-end gap-2"><button className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700"><Copy className="inline h-3.5 w-3.5" /> 복제</button><button disabled={t.scope === '인사팀 공유'} onClick={() => onShare?.(t)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400"><Share2 className="inline h-3.5 w-3.5" /> 공유</button><button onClick={() => { onApply?.(t); setPage('candidates') }} className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-black text-white">적용</button></div></div></Card> }
-function UploadPage({ onUploaded, lastUpload, setPage, authToken }) {
+function UploadPage({ onUploaded, lastUpload, setPage, authToken, uploadRows }) {
   const [file, setFile] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
@@ -576,7 +616,7 @@ function UploadPage({ onUploaded, lastUpload, setPage, authToken }) {
     }
   }
 
-  return <div className="space-y-5 p-5"><Card><CardHeader icon={UploadCloud} title="엑셀 업로드 및 데이터 갱신" subtitle={apiReady ? "업로드 → 검증 → 최종 반영" : "API 주소가 설정되면 실제 업로드가 활성화됩니다."} /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-5">{['파일 업로드', '파일 선택', '컬럼 확인', '검증 결과', '최종 반영'].map((s, i) => <div key={s} className={`rounded-2xl p-4 text-center ring-1 ${i <= activeStep ? 'bg-slate-900 text-white ring-slate-900' : 'bg-slate-50 text-slate-700 ring-slate-200'}`}><p className="text-xs font-black">STEP {i + 1}</p><p className="mt-1 text-sm font-black">{s}</p></div>)}</div><div className="p-5 pt-0"><label onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); chooseFile(e.dataTransfer.files?.[0]) }} className="flex min-h-60 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center hover:bg-white"><FileSpreadsheet className="h-12 w-12 text-slate-500" /><h3 className="mt-4 text-xl font-black text-slate-900">{file ? file.name : '파일을 드래그하거나 클릭하여 업로드'}</h3><p className="mt-2 text-sm font-semibold text-slate-500">xlsx / 사번과 이름 필수 / dry run 검증 후 최종 반영</p><input type="file" accept=".xlsx" className="sr-only" onChange={(e) => chooseFile(e.target.files?.[0])} /></label>{!apiReady && <div className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-800 ring-1 ring-amber-100">`.env`에 `VITE_API_BASE_URL=http://127.0.0.1:5000`을 설정하고 프론트 서버를 다시 시작하면 실제 업로드를 사용할 수 있습니다.</div>}{error && <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm font-bold text-rose-800 ring-1 ring-rose-100">{error}</div>}<div className="mt-5 flex flex-wrap justify-end gap-2"><button disabled={!apiReady || !file || busy} onClick={() => runUpload(true)} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400">검증 실행</button><button disabled={!apiReady || !file || busy || !result || result.rows_error > 0} onClick={() => runUpload(false)} className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white disabled:bg-slate-300">최종 반영</button>{lastUpload && <button onClick={() => setPage('candidates')} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700">후보자 목록 보기</button>}</div></div></Card>{result && <Card><CardHeader icon={CheckCircle2} title="검증 결과" subtitle={result.file} right={<Badge tone={result.rows_error > 0 ? 'red' : 'green'}>{result.dry_run ? '검증 완료' : '반영 완료'}</Badge>} /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3 xl:grid-cols-6"><Metric label="정상 행" value={result.rows_valid} icon={CheckCircle2} tone="green" /><Metric label="신규" value={result.newRows ?? 0} icon={User} tone="blue" /><Metric label="변경" value={result.changedRows ?? 0} icon={Activity} tone="amber" /><Metric label="중복" value={result.dup ?? 0} icon={Copy} /><Metric label="오류 행" value={result.rows_error} icon={AlertTriangle} tone={result.rows_error > 0 ? 'red' : 'default'} /><Metric label="반영 건수" value={result.upserted ?? '-'} icon={Database} tone="purple" /></div>{result.headers?.length > 0 && <div className="px-5 pb-5"><p className="mb-2 text-xs font-black text-slate-500">인식된 컬럼</p><div className="flex flex-wrap gap-2">{result.headers.map((header) => <span key={header} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{header || '(빈 컬럼)'}</span>)}</div></div>}{result.errors?.length > 0 && <div className="px-5 pb-5"><div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr><th className="px-4 py-3 text-left text-xs font-black text-slate-500">행</th><th className="px-4 py-3 text-left text-xs font-black text-slate-500">오류</th></tr></thead><tbody className="divide-y divide-slate-100 bg-white">{result.errors.map((item) => <tr key={`${item.row_number}-${item.message}`}><td className="px-4 py-3 font-bold">{item.row_number}</td><td className="px-4 py-3 font-semibold text-rose-700">{item.message}</td></tr>)}</tbody></table></div></div>}</Card>}<UploadStatusPanel canManage /></div>
+  return <div className="space-y-5 p-5"><Card><CardHeader icon={UploadCloud} title="엑셀 업로드 및 데이터 갱신" subtitle={apiReady ? "업로드 → 검증 → 최종 반영" : "API 주소가 설정되면 실제 업로드가 활성화됩니다."} /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-5">{['파일 업로드', '파일 선택', '컬럼 확인', '검증 결과', '최종 반영'].map((s, i) => <div key={s} className={`rounded-2xl p-4 text-center ring-1 ${i <= activeStep ? 'bg-slate-900 text-white ring-slate-900' : 'bg-slate-50 text-slate-700 ring-slate-200'}`}><p className="text-xs font-black">STEP {i + 1}</p><p className="mt-1 text-sm font-black">{s}</p></div>)}</div><div className="p-5 pt-0"><label onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); chooseFile(e.dataTransfer.files?.[0]) }} className="flex min-h-60 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-slate-300 bg-slate-50 p-8 text-center hover:bg-white"><FileSpreadsheet className="h-12 w-12 text-slate-500" /><h3 className="mt-4 text-xl font-black text-slate-900">{file ? file.name : '파일을 드래그하거나 클릭하여 업로드'}</h3><p className="mt-2 text-sm font-semibold text-slate-500">xlsx / 사번과 이름 필수 / dry run 검증 후 최종 반영</p><input type="file" accept=".xlsx" className="sr-only" onChange={(e) => chooseFile(e.target.files?.[0])} /></label>{!apiReady && <div className="mt-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-800 ring-1 ring-amber-100">`.env`에 `VITE_API_BASE_URL=http://127.0.0.1:5000`을 설정하고 프론트 서버를 다시 시작하면 실제 업로드를 사용할 수 있습니다.</div>}{error && <div className="mt-4 rounded-2xl bg-rose-50 p-4 text-sm font-bold text-rose-800 ring-1 ring-rose-100">{error}</div>}<div className="mt-5 flex flex-wrap justify-end gap-2"><button disabled={!apiReady || !file || busy} onClick={() => runUpload(true)} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 disabled:bg-slate-100 disabled:text-slate-400">검증 실행</button><button disabled={!apiReady || !file || busy || !result || result.rows_error > 0} onClick={() => runUpload(false)} className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-black text-white disabled:bg-slate-300">최종 반영</button>{lastUpload && <button onClick={() => setPage('candidates')} className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700">후보자 목록 보기</button>}</div></div></Card>{result && <Card><CardHeader icon={CheckCircle2} title="검증 결과" subtitle={result.file} right={<Badge tone={result.rows_error > 0 ? 'red' : 'green'}>{result.dry_run ? '검증 완료' : '반영 완료'}</Badge>} /><div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-3 xl:grid-cols-6"><Metric label="정상 행" value={result.rows_valid} icon={CheckCircle2} tone="green" /><Metric label="신규" value={result.newRows ?? 0} icon={User} tone="blue" /><Metric label="변경" value={result.changedRows ?? 0} icon={Activity} tone="amber" /><Metric label="중복" value={result.dup ?? 0} icon={Copy} /><Metric label="오류 행" value={result.rows_error} icon={AlertTriangle} tone={result.rows_error > 0 ? 'red' : 'default'} /><Metric label="반영 건수" value={result.upserted ?? '-'} icon={Database} tone="purple" /></div>{result.headers?.length > 0 && <div className="px-5 pb-5"><p className="mb-2 text-xs font-black text-slate-500">인식된 컬럼</p><div className="flex flex-wrap gap-2">{result.headers.map((header) => <span key={header} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{header || '(빈 컬럼)'}</span>)}</div></div>}{result.errors?.length > 0 && <div className="px-5 pb-5"><div className="overflow-x-auto rounded-2xl border border-slate-200"><table className="min-w-full divide-y divide-slate-200 text-sm"><thead className="bg-slate-50"><tr><th className="px-4 py-3 text-left text-xs font-black text-slate-500">행</th><th className="px-4 py-3 text-left text-xs font-black text-slate-500">오류</th></tr></thead><tbody className="divide-y divide-slate-100 bg-white">{result.errors.map((item) => <tr key={`${item.row_number}-${item.message}`}><td className="px-4 py-3 font-bold">{item.row_number}</td><td className="px-4 py-3 font-semibold text-rose-700">{item.message}</td></tr>)}</tbody></table></div></div>}</Card>}<UploadStatusPanel canManage rows={uploadRows} /></div>
 }
 function AuditPage({ rows = audits, status }) {
   const detailCount = rows.filter((row) => row.action?.includes('조회')).length
@@ -599,6 +639,7 @@ export default function App() {
   const [auditStatus, setAuditStatus] = useState(isApiEnabled() ? 'API 감사 로그를 조회합니다.' : 'API 주소 미설정: mock data를 표시합니다.')
   const [templateRows, setTemplateRows] = useState(templates)
   const [templateStatus, setTemplateStatus] = useState(isApiEnabled() ? 'API 템플릿을 조회합니다.' : 'API 주소 미설정: mock template을 표시합니다.')
+  const [uploadRows, setUploadRows] = useState(isApiEnabled() ? [] : uploads)
   const [candidateFilter, setCandidateFilter] = useState(DEFAULT_CANDIDATE_FILTER)
   const [selectedCandidate, setSelectedCandidate] = useState(candidates[0])
   const [selectedIds, setSelectedIds] = useState(['E24017', 'E21884', 'E22615'])
@@ -624,6 +665,7 @@ export default function App() {
     setLastUpload(summary)
     await reloadCandidates(authToken)
     await reloadAuditRows()
+    await reloadUploadRows()
   }
 
   const reloadAuditRows = async (token = authToken) => {
@@ -645,6 +687,16 @@ export default function App() {
       setTemplateStatus(`API 연동: 템플릿 ${rows.length}건`)
     } catch (err) {
       setTemplateStatus(`API 오류: ${err.message}`)
+    }
+  }
+
+  const reloadUploadRows = async (token = authToken) => {
+    if (!isApiEnabled() || !token) return
+    try {
+      const rows = await fetchUploadRuns(token)
+      setUploadRows(rows)
+    } catch {
+      setUploadRows([])
     }
   }
 
@@ -714,6 +766,7 @@ export default function App() {
       setAuthToken(payload.token)
       setRole(payload.user.role)
       await reloadCandidates(payload.token)
+      await reloadUploadRows(payload.token)
       if (payload.user.role === 'hr') {
         const rows = await fetchAuditRows(payload.token)
         setAuditRows(rows.length ? rows : audits)
@@ -734,18 +787,19 @@ export default function App() {
     setAuthToken('')
     setAuditRows(audits)
     setTemplateRows(templates)
+    setUploadRows(isApiEnabled() ? [] : uploads)
     setAuthed(false)
     setPage('login')
   }
 
   if (!authed || page === 'login') return <LoginPage onLogin={handleLogin} role={role} setRole={setRole} />
   let content
-  if (page === 'dashboard') content = <DashboardPage setPage={setPage} role={role} candidateRows={candidateRows} setSelectedCandidate={setSelectedCandidate} templateRows={templateRows} onApplyTemplate={applyTemplate} />
+  if (page === 'dashboard') content = <DashboardPage setPage={setPage} role={role} candidateRows={candidateRows} setSelectedCandidate={setSelectedCandidate} templateRows={templateRows} onApplyTemplate={applyTemplate} uploadRows={uploadRows} />
   else if (page === 'candidates') content = <CandidatesPage setPage={setPage} setSelectedCandidate={setSelectedCandidate} selectedIds={selectedIds} setSelectedIds={setSelectedIds} candidateRows={candidateRows} apiStatus={apiStatus} filterState={candidateFilter} setFilterState={setCandidateFilter} onSaveTemplate={saveCurrentTemplate} templateStatus={templateStatus} />
   else if (page === 'detail') content = <DetailPage candidate={selectedCandidate} setPage={setPage} setSelectedIds={setSelectedIds} selectedIds={selectedIds} />
   else if (page === 'compare') content = <ComparePage selectedIds={selectedIds} setPage={setPage} candidateRows={candidateRows} />
   else if (page === 'templates') content = <TemplatesPage setPage={setPage} rows={templateRows} onApply={applyTemplate} onShare={shareTemplateItem} status={templateStatus} />
-  else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} />
+  else if (page === 'upload') content = <UploadPage onUploaded={handleUploaded} lastUpload={lastUpload} setPage={setPage} authToken={authToken} uploadRows={uploadRows} />
   else if (page === 'audit') content = <AuditPage rows={auditRows} status={auditStatus} />
   else content = <ForbiddenPage setPage={setPage} role={role} />
   return <AppShell role={role} page={page} setPage={setPage} onLogout={handleLogout}>{content}</AppShell>

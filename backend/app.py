@@ -199,6 +199,26 @@ def create_app(db_path: str | os.PathLike[str] | None = None) -> Flask:
             conn.commit()
         return jsonify({"items": [dict(row) for row in rows]})
 
+    @app.get("/api/upload-runs")
+    def list_upload_runs():
+        with connect(app.config["DB_PATH"]) as conn:
+            user = authenticate_request(conn)
+            if user is None:
+                log_audit_event(conn, user=None, action="업로드 이력 조회", target="/api/upload-runs", result="차단", risk="위험")
+                conn.commit()
+                return jsonify({"error": "인증이 필요합니다."}), 401
+            rows = conn.execute(
+                """
+                SELECT id, filename, summary_json, created_at
+                FROM upload_runs
+                ORDER BY created_at DESC, id DESC
+                LIMIT 20
+                """
+            ).fetchall()
+            log_audit_event(conn, user=user, action="업로드 이력 조회", target=f"{len(rows)}건", result="성공", risk="정상")
+            conn.commit()
+        return jsonify({"items": [upload_run_row_to_dict(row) for row in rows]})
+
     @app.get("/api/audit-logs")
     def list_audit_logs():
         with connect(app.config["DB_PATH"]) as conn:
@@ -797,6 +817,27 @@ def fetch_templates_for_user(conn: sqlite3.Connection, user: dict[str, Any]) -> 
         ORDER BY updated_at DESC, name ASC
         """
     ).fetchall()
+
+
+def upload_run_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+    summary = json.loads(row["summary_json"] or "{}")
+    rows_valid = int(summary.get("rows_valid") or 0)
+    rows_error = int(summary.get("rows_error") or 0)
+    changed_rows = int(summary.get("changedRows") or 0)
+    item = {
+        "id": row["id"],
+        "file": row["filename"],
+        "at": row["created_at"],
+        "user": "API 업로드",
+        "rows": rows_valid + rows_error,
+        "success": rows_valid,
+        "newRows": int(summary.get("newRows") or 0),
+        "changes": changed_rows,
+        "dup": int(summary.get("dup") or 0),
+        "errors": rows_error,
+        "status": "오류 확인 필요" if rows_error else "정상 반영",
+    }
+    return item
 
 
 def delete_template(conn: sqlite3.Connection, template_id: str) -> int:

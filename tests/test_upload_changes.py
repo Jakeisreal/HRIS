@@ -69,6 +69,15 @@ class CandidateUploadChangeTest(unittest.TestCase):
         self.assertEqual(e2["job_family"], "영업")
         self.assertEqual(e2["language_type"], "TOEIC")
 
+        runs = self.client.get("/api/upload-runs", headers={"Authorization": f"Bearer {self.token}"})
+        self.assertEqual(runs.status_code, 200)
+        self.assertEqual(runs.json["items"][0]["file"], "second.xlsx")
+        self.assertEqual(runs.json["items"][0]["rows"], 3)
+        self.assertEqual(runs.json["items"][0]["newRows"], 1)
+        self.assertEqual(runs.json["items"][0]["changes"], 1)
+        self.assertEqual(runs.json["items"][0]["dup"], 1)
+        self.assertEqual(runs.json["items"][0]["status"], "정상 반영")
+
 
 def workbook_bytes(headers, rows):
     workbook = Workbook()
